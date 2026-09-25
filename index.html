@@ -1,0 +1,1861 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    >
+
+    <title>Coil Stock Scanner</title>
+
+    <!--
+        Tesseract.js
+        For this first prototype we're loading it from a CDN.
+        That means this test needs an internet connection.
+    -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg: #f2f3f5;
+            --card: #ffffff;
+            --text: #181818;
+            --muted: #777;
+            --line: #dadde2;
+            --dark: #161616;
+            --red: #d9272e;
+            --green: #15803d;
+            --orange: #b45309;
+        }
+
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            background: var(--bg);
+            font-family:
+                Inter,
+                Arial,
+                Helvetica,
+                sans-serif;
+            color: var(--text);
+        }
+
+        body {
+            min-height: 100vh;
+        }
+
+        .app {
+            width: min(960px, 100%);
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+            padding: 8px 0 24px;
+        }
+
+        .logo {
+            width: 180px;
+            max-width: 42vw;
+            height: auto;
+            object-fit: contain;
+        }
+
+        .header-copy {
+            flex: 1;
+        }
+
+        h1 {
+            font-size: clamp(24px, 4vw, 38px);
+            margin: 0 0 5px;
+            line-height: 1.05;
+        }
+
+        .subtitle {
+            margin: 0;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .card {
+            background: var(--card);
+            border-radius: 18px;
+            padding: 20px;
+            margin-bottom: 18px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+        }
+
+        .upload-zone {
+            position: relative;
+            border: 2px dashed #c8cbd0;
+            border-radius: 16px;
+            padding: 34px 20px;
+            text-align: center;
+            background: #fafafa;
+            cursor: pointer;
+            transition: 0.2s ease;
+        }
+
+        .upload-zone:hover {
+            border-color: #999;
+            background: #f6f6f6;
+        }
+
+        .upload-zone strong {
+            display: block;
+            font-size: 19px;
+            margin-bottom: 7px;
+        }
+
+        .upload-zone span {
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        #imageInput {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        #previewWrapper {
+            display: none;
+            margin-top: 18px;
+        }
+
+        #preview {
+            width: 100%;
+            max-height: 540px;
+            object-fit: contain;
+            border-radius: 14px;
+            background: #111;
+        }
+
+        .buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 16px;
+        }
+
+        button {
+            border: 0;
+            border-radius: 999px;
+            padding: 13px 22px;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: 0.15s ease;
+        }
+
+        button:active {
+            transform: scale(0.98);
+        }
+
+        button:disabled {
+            opacity: 0.45;
+            cursor: default;
+        }
+
+        .primary {
+            background: var(--dark);
+            color: white;
+        }
+
+        .secondary {
+            background: #e7e8ea;
+            color: #111;
+        }
+
+        .save {
+            background: var(--red);
+            color: white;
+        }
+
+        .progress-area {
+            display: none;
+            margin-top: 20px;
+        }
+
+        .progress-track {
+            height: 12px;
+            background: #eceef0;
+            border-radius: 20px;
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            width: 0%;
+            height: 100%;
+            background: #171717;
+            transition: width 0.2s ease;
+        }
+
+        #progressText {
+            margin-top: 10px;
+            font-size: 14px;
+            color: var(--muted);
+        }
+
+        .result-title {
+            display: flex;
+            justify-content: space-between;
+            gap: 15px;
+            align-items: center;
+            margin-bottom: 17px;
+        }
+
+        .result-title h2 {
+            margin: 0;
+        }
+
+        .confidence {
+            font-size: 13px;
+            font-weight: 700;
+            border-radius: 999px;
+            padding: 7px 11px;
+            background: #eee;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        .field {
+            position: relative;
+        }
+
+        .field.full {
+            grid-column: 1 / -1;
+        }
+
+        label {
+            display: block;
+            margin: 0 0 6px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 800;
+            color: #555;
+        }
+
+        input {
+            width: 100%;
+            border: 1px solid var(--line);
+            border-radius: 11px;
+            padding: 13px 14px;
+            font-size: 17px;
+            background: white;
+            color: #111;
+            outline: none;
+        }
+
+        input:focus {
+            border-color: #555;
+        }
+
+        input.good {
+            border-color: #81bf91;
+            background: #f6fff8;
+        }
+
+        input.warning {
+            border-color: #e2a84d;
+            background: #fffaf0;
+        }
+
+        .validation {
+            margin-top: 18px;
+            display: grid;
+            gap: 8px;
+        }
+
+        .check {
+            padding: 11px 13px;
+            border-radius: 10px;
+            font-size: 14px;
+        }
+
+        .check.good {
+            background: #edf9f0;
+            color: var(--green);
+        }
+
+        .check.warning {
+            background: #fff6e6;
+            color: var(--orange);
+        }
+
+        details {
+            margin-top: 18px;
+        }
+
+        summary {
+            cursor: pointer;
+            font-weight: 700;
+            padding: 8px 0;
+        }
+
+        #rawText {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            background: #121212;
+            color: #eaeaea;
+            padding: 15px;
+            border-radius: 12px;
+            max-height: 360px;
+            overflow-y: auto;
+            font-family: Consolas, monospace;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        #resultsCard {
+            display: none;
+        }
+
+        .debug-images {
+            display: none;
+        }
+
+        .tip {
+            margin-top: 15px;
+            padding: 13px 15px;
+            border-radius: 11px;
+            background: #f0f4f8;
+            font-size: 13px;
+            line-height: 1.5;
+            color: #4b5563;
+        }
+
+        @media (max-width: 650px) {
+            .app {
+                padding: 14px;
+            }
+
+            header {
+                padding-top: 4px;
+                padding-bottom: 18px;
+            }
+
+            .card {
+                padding: 15px;
+                border-radius: 15px;
+            }
+
+            .grid {
+                grid-template-columns: 1fr;
+            }
+
+            .field.full {
+                grid-column: auto;
+            }
+
+            button {
+                flex: 1;
+                min-width: 140px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="app">
+
+    <header>
+        <img
+            src="logo.png"
+            alt="Company Logo"
+            class="logo"
+            onerror="this.style.display='none'"
+        >
+
+        <div class="header-copy">
+            <h1>Coil Stock Scanner</h1>
+            <p class="subtitle">
+                Photograph a steel coil label and extract stock information.
+            </p>
+        </div>
+    </header>
+
+    <section class="card">
+
+        <div class="upload-zone">
+            <strong>Take or select a label photo</strong>
+            <span>
+                Fill as much of the image as possible with the blue stock label.
+            </span>
+
+            <input
+                type="file"
+                id="imageInput"
+                accept="image/*"
+                capture="environment"
+            >
+        </div>
+
+        <div id="previewWrapper">
+
+            <img id="preview" alt="Label preview">
+
+            <div class="buttons">
+
+                <button
+                    class="primary"
+                    id="scanButton"
+                >
+                    SCAN LABEL
+                </button>
+
+                <button
+                    class="secondary"
+                    id="clearButton"
+                >
+                    CLEAR
+                </button>
+
+            </div>
+
+            <div class="tip">
+                <strong>For best results:</strong>
+                get close to the label, keep the camera reasonably square to it,
+                avoid glare, and make sure the printed text is sharp.
+            </div>
+
+            <div class="progress-area" id="progressArea">
+
+                <div class="progress-track">
+                    <div
+                        class="progress-bar"
+                        id="progressBar"
+                    ></div>
+                </div>
+
+                <div id="progressText">
+                    Preparing image...
+                </div>
+
+            </div>
+
+        </div>
+
+    </section>
+
+
+    <section class="card" id="resultsCard">
+
+        <div class="result-title">
+
+            <h2>Detected Coil Information</h2>
+
+            <div class="confidence" id="overallConfidence">
+                Checking...
+            </div>
+
+        </div>
+
+        <div class="grid">
+
+            <div class="field">
+                <label for="partNo">Part Number</label>
+                <input id="partNo" type="text">
+            </div>
+
+            <div class="field">
+                <label for="coilId">Coil ID</label>
+                <input id="coilId" type="text">
+            </div>
+
+            <div class="field full">
+                <label for="colour">Colour</label>
+                <input id="colour" type="text">
+            </div>
+
+            <div class="field">
+                <label for="netLb">Net Weight — lb</label>
+                <input id="netLb" type="number">
+            </div>
+
+            <div class="field">
+                <label for="netKg">Net Weight — kg</label>
+                <input id="netKg" type="number">
+            </div>
+
+            <div class="field">
+                <label for="grossLb">Gross Weight — lb</label>
+                <input id="grossLb" type="number">
+            </div>
+
+            <div class="field">
+                <label for="grossKg">Gross Weight — kg</label>
+                <input id="grossKg" type="number">
+            </div>
+
+            <div class="field">
+                <label for="lengthFt">Length — ft</label>
+                <input id="lengthFt" type="number">
+            </div>
+
+            <div class="field">
+                <label for="lengthM">Length — m</label>
+                <input id="lengthM" type="number">
+            </div>
+
+        </div>
+
+        <div class="validation" id="validation"></div>
+
+        <div class="buttons">
+
+            <button
+                class="save"
+                id="csvButton"
+            >
+                DOWNLOAD CSV ROW
+            </button>
+
+            <button
+                class="secondary"
+                id="rescanButton"
+            >
+                SCAN AGAIN
+            </button>
+
+        </div>
+
+        <details>
+
+            <summary>
+                Show raw OCR text
+            </summary>
+
+            <div id="rawText"></div>
+
+        </details>
+
+    </section>
+
+</div>
+
+
+<!-- hidden canvas used for OCR processing -->
+<canvas
+    id="processingCanvas"
+    class="debug-images"
+></canvas>
+
+
+<script>
+
+    // ============================================================
+    // ELEMENTS
+    // ============================================================
+
+    const imageInput = document.getElementById("imageInput");
+    const preview = document.getElementById("preview");
+    const previewWrapper = document.getElementById("previewWrapper");
+
+    const scanButton = document.getElementById("scanButton");
+    const clearButton = document.getElementById("clearButton");
+    const rescanButton = document.getElementById("rescanButton");
+
+    const progressArea = document.getElementById("progressArea");
+    const progressBar = document.getElementById("progressBar");
+    const progressText = document.getElementById("progressText");
+
+    const resultsCard = document.getElementById("resultsCard");
+    const rawText = document.getElementById("rawText");
+
+    const processingCanvas =
+        document.getElementById("processingCanvas");
+
+    const ctx =
+        processingCanvas.getContext("2d", {
+            willReadFrequently: true
+        });
+
+
+    let currentImage = null;
+
+
+    // ============================================================
+    // FILE / CAMERA INPUT
+    // ============================================================
+
+    imageInput.addEventListener("change", async (event) => {
+
+        const file = event.target.files[0];
+
+        if (!file) return;
+
+        const objectUrl = URL.createObjectURL(file);
+
+        const img = new Image();
+
+        img.onload = () => {
+
+            currentImage = img;
+
+            preview.src = objectUrl;
+
+            previewWrapper.style.display = "block";
+
+            resultsCard.style.display = "none";
+
+            progressArea.style.display = "none";
+
+            scanButton.disabled = false;
+
+        };
+
+        img.src = objectUrl;
+
+    });
+
+
+    // ============================================================
+    // CLEAR
+    // ============================================================
+
+    clearButton.addEventListener("click", resetApp);
+
+    rescanButton.addEventListener("click", () => {
+
+        resultsCard.style.display = "none";
+
+        window.scrollTo({
+            top: 0,
+            behavior: "smooth"
+        });
+
+    });
+
+
+    function resetApp() {
+
+        currentImage = null;
+
+        imageInput.value = "";
+
+        preview.src = "";
+
+        previewWrapper.style.display = "none";
+
+        resultsCard.style.display = "none";
+
+        progressArea.style.display = "none";
+
+    }
+
+
+    // ============================================================
+    // IMAGE PREPROCESSING
+    //
+    // This does NOT yet attempt cylindrical de-warping.
+    //
+    // For this first experiment we:
+    // 1. resize
+    // 2. convert to grayscale
+    // 3. increase contrast
+    //
+    // That's enough to determine whether normal OCR has a good
+    // chance of reading your real labels.
+    // ============================================================
+
+    function preprocessImage(img) {
+
+        const MAX_WIDTH = 2200;
+
+        let width = img.naturalWidth || img.width;
+        let height = img.naturalHeight || img.height;
+
+        if (width > MAX_WIDTH) {
+
+            const scale = MAX_WIDTH / width;
+
+            width = MAX_WIDTH;
+
+            height =
+                Math.round(height * scale);
+
+        }
+
+        processingCanvas.width = width;
+        processingCanvas.height = height;
+
+        ctx.drawImage(
+            img,
+            0,
+            0,
+            width,
+            height
+        );
+
+
+        const imageData =
+            ctx.getImageData(
+                0,
+                0,
+                width,
+                height
+            );
+
+
+        const data = imageData.data;
+
+
+        for (let i = 0; i < data.length; i += 4) {
+
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+
+
+            // perceived brightness
+            let gray =
+                0.299 * r +
+                0.587 * g +
+                0.114 * b;
+
+
+            // contrast boost
+            gray =
+                ((gray - 128) * 1.65) + 128;
+
+
+            gray =
+                Math.max(
+                    0,
+                    Math.min(
+                        255,
+                        gray
+                    )
+                );
+
+
+            data[i] = gray;
+            data[i + 1] = gray;
+            data[i + 2] = gray;
+
+        }
+
+
+        ctx.putImageData(
+            imageData,
+            0,
+            0
+        );
+
+
+        return processingCanvas;
+
+    }
+
+
+    // ============================================================
+    // OCR
+    // ============================================================
+
+    scanButton.addEventListener("click", async () => {
+
+        if (!currentImage) return;
+
+        scanButton.disabled = true;
+
+        progressArea.style.display = "block";
+
+        progressBar.style.width = "1%";
+
+        progressText.textContent =
+            "Preparing photograph...";
+
+
+        try {
+
+            const source =
+                preprocessImage(currentImage);
+
+
+            const result =
+                await Tesseract.recognize(
+                    source,
+                    "eng",
+                    {
+                        logger: message => {
+
+                            console.log(message);
+
+                            if (
+                                typeof message.progress === "number"
+                            ) {
+
+                                const percent =
+                                    Math.round(
+                                        message.progress * 100
+                                    );
+
+
+                                progressBar.style.width =
+                                    percent + "%";
+
+
+                                if (
+                                    message.status ===
+                                    "recognizing text"
+                                ) {
+
+                                    progressText.textContent =
+                                        "Reading label... " +
+                                        percent +
+                                        "%";
+
+                                }
+
+                                else {
+
+                                    progressText.textContent =
+                                        formatStatus(
+                                            message.status
+                                        );
+
+                                }
+
+                            }
+
+                        }
+                    }
+                );
+
+
+            const text =
+                result.data.text || "";
+
+
+            rawText.textContent = text;
+
+
+            progressText.textContent =
+                "Extracting coil information...";
+
+
+            const fields =
+                parseLabel(text);
+
+
+            fillFields(fields);
+
+            validateFields();
+
+
+            progressBar.style.width = "100%";
+
+            progressText.textContent =
+                "Scan complete.";
+
+
+            resultsCard.style.display =
+                "block";
+
+
+            resultsCard.scrollIntoView({
+                behavior: "smooth",
+                block: "start"
+            });
+
+        }
+
+        catch (error) {
+
+            console.error(error);
+
+            progressText.textContent =
+                "Unable to scan image. See console for details.";
+
+            alert(
+                "OCR failed. Try another photograph or make sure the page has internet access."
+            );
+
+        }
+
+        finally {
+
+            scanButton.disabled = false;
+
+        }
+
+    });
+
+
+    function formatStatus(status) {
+
+        if (!status) {
+            return "Working...";
+        }
+
+        return status
+            .replaceAll("_", " ")
+            .replace(/\b\w/g, c =>
+                c.toUpperCase()
+            );
+
+    }
+
+
+    // ============================================================
+    // NORMALIZATION
+    // ============================================================
+
+    function normalizeText(text) {
+
+        return text
+            .replace(/\r/g, "")
+            .replace(/[|]/g, "I")
+            .replace(/[“”]/g, '"')
+            .replace(/[‘’]/g, "'")
+            .replace(/[ \t]+/g, " ")
+            .toUpperCase();
+
+    }
+
+
+    function cleanNumber(value) {
+
+        if (value === undefined ||
+            value === null) {
+
+            return "";
+
+        }
+
+
+        let cleaned =
+            String(value)
+                .replace(/[,\s]/g, "")
+                .replace(/[OQ]/g, "0")
+                .replace(/[IL]/g, "1")
+                .replace(/[^\d]/g, "");
+
+
+        return cleaned;
+
+    }
+
+
+    // ============================================================
+    // LABEL PARSER
+    //
+    // These patterns are intentionally based on the style of label
+    // from your photograph.
+    //
+    // We'll improve these once you test several real coil labels.
+    // ============================================================
+
+    function parseLabel(raw) {
+
+        const text =
+            normalizeText(raw);
+
+
+        const result = {
+
+            partNo: "",
+            colour: "",
+
+            netLb: "",
+            netKg: "",
+
+            grossLb: "",
+            grossKg: "",
+
+            lengthFt: "",
+            lengthM: "",
+
+            coilId: ""
+
+        };
+
+
+        // --------------------------------------------------------
+        // PART NUMBER
+        // Example:
+        // PART NO L2040K
+        // --------------------------------------------------------
+
+        let match =
+            text.match(
+                /PART\s*(?:NO|N0|NQ)?[.\s:]*([A-Z0-9-]{4,15})/
+            );
+
+
+        if (match) {
+
+            result.partNo =
+                cleanupCode(match[1]);
+
+        }
+
+
+        // --------------------------------------------------------
+        // COLOUR
+        //
+        // Typical source:
+        // CSM CLR KNOTTY DESERT OAK
+        //
+        // Stop at COATG / COLOR TOP / BACK / numeric data.
+        // --------------------------------------------------------
+
+        match =
+            text.match(
+                /(?:CSM[\s_-]*CLR|CLR|COLOU?R\s*NAME)\s*[:\-]?\s*([A-Z][A-Z0-9 \-]{3,40})/
+            );
+
+
+        if (match) {
+
+            let colour =
+                match[1];
+
+
+            colour =
+                colour.split(
+                    /\b(?:COATG|COATING|COLOR|COLOUR|TOP|BACK|DATE|PART|SPEC|SIZE)\b/
+                )[0];
+
+
+            result.colour =
+                cleanupWords(colour);
+
+        }
+
+
+        // --------------------------------------------------------
+        // NET WEIGHT
+        //
+        // Example:
+        // N.WT 9,436 LBS
+        // [4,280 Kg]
+        // --------------------------------------------------------
+
+        match =
+            text.match(
+                /N[.\s_-]*W(?:T|7)[.\s:]*([0-9OQIL,\s]{3,10})\s*(?:LBS?|LB)?[\s\S]{0,35}?[\[\(]?\s*([0-9OQIL,\s]{3,10})\s*K[G6]/
+            );
+
+
+        if (match) {
+
+            result.netLb =
+                cleanNumber(match[1]);
+
+            result.netKg =
+                cleanNumber(match[2]);
+
+        }
+
+
+        // --------------------------------------------------------
+        // GROSS WEIGHT
+        //
+        // Example:
+        // G.WT 9,679 LBS
+        // [4,390 Kg]
+        // --------------------------------------------------------
+
+        match =
+            text.match(
+                /G[.\s_-]*W(?:T|7)[.\s:]*([0-9OQIL,\s]{3,10})\s*(?:LBS?|LB)?[\s\S]{0,35}?[\[\(]?\s*([0-9OQIL,\s]{3,10})\s*K[G6]/
+            );
+
+
+        if (match) {
+
+            result.grossLb =
+                cleanNumber(match[1]);
+
+            result.grossKg =
+                cleanNumber(match[2]);
+
+        }
+
+
+        // --------------------------------------------------------
+        // LENGTH
+        //
+        // Example:
+        // 2428 FT
+        // [740 M]
+        // --------------------------------------------------------
+
+        match =
+            text.match(
+                /([0-9OQIL,\s]{3,8})\s*F(?:T|7)\b[\s\S]{0,30}?[\[\(]?\s*([0-9OQIL,\s]{2,8})\s*M\b/
+            );
+
+
+        if (match) {
+
+            result.lengthFt =
+                cleanNumber(match[1]);
+
+            result.lengthM =
+                cleanNumber(match[2]);
+
+        }
+
+
+        // --------------------------------------------------------
+        // COIL ID
+        //
+        // Primary attempt: look for COIL ID.
+        // --------------------------------------------------------
+
+        match =
+            text.match(
+                /COIL\s*(?:ID|1D|NO)?[.\s:]*([A-Z0-9]{5,15})/
+            );
+
+
+        if (match) {
+
+            result.coilId =
+                cleanupCode(match[1]);
+
+        }
+
+
+        // --------------------------------------------------------
+        // Fallback coil ID:
+        //
+        // Labels often have a large mixed alpha/numeric identifier
+        // like J1GA90B.
+        // --------------------------------------------------------
+
+        if (!result.coilId) {
+
+            const candidates =
+                text.match(
+                    /\b(?=[A-Z0-9]{6,12}\b)(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*\d)[A-Z0-9]+\b/g
+                ) || [];
+
+
+            const ignore = [
+                "S5230",
+                "A755",
+                "ALUMINUM",
+                "VANCOUVER"
+            ];
+
+
+            const filtered =
+                candidates.filter(code => {
+
+                    if (
+                        ignore.some(item =>
+                            code.includes(item)
+                        )
+                    ) {
+
+                        return false;
+
+                    }
+
+
+                    if (
+                        result.partNo &&
+                        code === result.partNo
+                    ) {
+
+                        return false;
+
+                    }
+
+
+                    return true;
+
+                });
+
+
+            if (filtered.length) {
+
+                // A 7-character ID is common on the example label.
+                const preferred =
+                    filtered.find(
+                        item =>
+                            item.length >= 6 &&
+                            item.length <= 8
+                    );
+
+
+                result.coilId =
+                    preferred || filtered[0];
+
+            }
+
+        }
+
+
+        return result;
+
+    }
+
+
+    function cleanupCode(code) {
+
+        return String(code)
+            .replace(/[^A-Z0-9-]/g, "")
+            .trim();
+
+    }
+
+
+    function cleanupWords(value) {
+
+        return String(value)
+            .replace(/[^A-Z0-9 \-&]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+
+    }
+
+
+    // ============================================================
+    // FIELD DISPLAY
+    // ============================================================
+
+    function fillFields(data) {
+
+        document.getElementById("partNo").value =
+            data.partNo;
+
+        document.getElementById("colour").value =
+            data.colour;
+
+        document.getElementById("netLb").value =
+            data.netLb;
+
+        document.getElementById("netKg").value =
+            data.netKg;
+
+        document.getElementById("grossLb").value =
+            data.grossLb;
+
+        document.getElementById("grossKg").value =
+            data.grossKg;
+
+        document.getElementById("lengthFt").value =
+            data.lengthFt;
+
+        document.getElementById("lengthM").value =
+            data.lengthM;
+
+        document.getElementById("coilId").value =
+            data.coilId;
+
+    }
+
+
+    // ============================================================
+    // VALIDATION
+    // ============================================================
+
+    const validationInputs =
+        document.querySelectorAll(
+            "#resultsCard input"
+        );
+
+
+    validationInputs.forEach(input => {
+
+        input.addEventListener(
+            "input",
+            validateFields
+        );
+
+    });
+
+
+    function validateFields() {
+
+        validationInputs.forEach(input => {
+
+            input.classList.remove(
+                "good",
+                "warning"
+            );
+
+        });
+
+
+        const partNo =
+            value("partNo");
+
+        const coilId =
+            value("coilId");
+
+        const colour =
+            value("colour");
+
+
+        const netLb =
+            numberValue("netLb");
+
+        const netKg =
+            numberValue("netKg");
+
+        const grossLb =
+            numberValue("grossLb");
+
+        const grossKg =
+            numberValue("grossKg");
+
+        const ft =
+            numberValue("lengthFt");
+
+        const metres =
+            numberValue("lengthM");
+
+
+        const messages = [];
+
+        let totalChecks = 0;
+        let passedChecks = 0;
+
+
+        // --------------------------------------------------------
+        // Net weight conversion
+        // --------------------------------------------------------
+
+        if (netLb && netKg) {
+
+            totalChecks++;
+
+            const expectedKg =
+                netLb * 0.45359237;
+
+
+            const difference =
+                percentDifference(
+                    expectedKg,
+                    netKg
+                );
+
+
+            if (difference <= 1.5) {
+
+                passedChecks++;
+
+                markGood(
+                    "netLb",
+                    "netKg"
+                );
+
+                messages.push(
+                    goodMessage(
+                        "Net weight conversion agrees"
+                    )
+                );
+
+            }
+
+            else {
+
+                markWarning(
+                    "netLb",
+                    "netKg"
+                );
+
+                messages.push(
+                    warningMessage(
+                        "Net weight values do not agree. Please check the label."
+                    )
+                );
+
+            }
+
+        }
+
+
+        // --------------------------------------------------------
+        // Gross weight conversion
+        // --------------------------------------------------------
+
+        if (grossLb && grossKg) {
+
+            totalChecks++;
+
+            const expectedKg =
+                grossLb * 0.45359237;
+
+
+            const difference =
+                percentDifference(
+                    expectedKg,
+                    grossKg
+                );
+
+
+            if (difference <= 1.5) {
+
+                passedChecks++;
+
+                markGood(
+                    "grossLb",
+                    "grossKg"
+                );
+
+                messages.push(
+                    goodMessage(
+                        "Gross weight conversion agrees"
+                    )
+                );
+
+            }
+
+            else {
+
+                markWarning(
+                    "grossLb",
+                    "grossKg"
+                );
+
+                messages.push(
+                    warningMessage(
+                        "Gross weight values do not agree. Please check the label."
+                    )
+                );
+
+            }
+
+        }
+
+
+        // --------------------------------------------------------
+        // Length conversion
+        // --------------------------------------------------------
+
+        if (ft && metres) {
+
+            totalChecks++;
+
+            const expectedM =
+                ft * 0.3048;
+
+
+            const difference =
+                percentDifference(
+                    expectedM,
+                    metres
+                );
+
+
+            if (difference <= 1.5) {
+
+                passedChecks++;
+
+                markGood(
+                    "lengthFt",
+                    "lengthM"
+                );
+
+                messages.push(
+                    goodMessage(
+                        "Length conversion agrees"
+                    )
+                );
+
+            }
+
+            else {
+
+                markWarning(
+                    "lengthFt",
+                    "lengthM"
+                );
+
+                messages.push(
+                    warningMessage(
+                        "Length values do not agree. Please check the label."
+                    )
+                );
+
+            }
+
+        }
+
+
+        // --------------------------------------------------------
+        // Gross should be greater than net
+        // --------------------------------------------------------
+
+        if (grossLb && netLb) {
+
+            totalChecks++;
+
+            if (grossLb >= netLb) {
+
+                passedChecks++;
+
+                messages.push(
+                    goodMessage(
+                        "Gross weight is greater than net weight"
+                    )
+                );
+
+            }
+
+            else {
+
+                markWarning(
+                    "grossLb",
+                    "netLb"
+                );
+
+                messages.push(
+                    warningMessage(
+                        "Gross weight is lower than net weight."
+                    )
+                );
+
+            }
+
+        }
+
+
+        // --------------------------------------------------------
+        // Basic text checks
+        // --------------------------------------------------------
+
+        [
+            ["partNo", partNo],
+            ["coilId", coilId],
+            ["colour", colour]
+        ].forEach(([id, fieldValue]) => {
+
+            totalChecks++;
+
+            if (fieldValue) {
+
+                passedChecks++;
+
+                document
+                    .getElementById(id)
+                    .classList
+                    .add("good");
+
+            }
+
+            else {
+
+                document
+                    .getElementById(id)
+                    .classList
+                    .add("warning");
+
+            }
+
+        });
+
+
+        // --------------------------------------------------------
+        // Display validation messages
+        // --------------------------------------------------------
+
+        const validation =
+            document.getElementById(
+                "validation"
+            );
+
+
+        validation.innerHTML =
+            messages.join("");
+
+
+        const score =
+            totalChecks
+                ? passedChecks / totalChecks
+                : 0;
+
+
+        const confidence =
+            document.getElementById(
+                "overallConfidence"
+            );
+
+
+        if (score >= 0.85) {
+
+            confidence.textContent =
+                "✓ Looks Good";
+
+            confidence.style.background =
+                "#e7f7eb";
+
+            confidence.style.color =
+                "#15803d";
+
+        }
+
+        else if (score >= 0.55) {
+
+            confidence.textContent =
+                "⚠ Check Fields";
+
+            confidence.style.background =
+                "#fff3d8";
+
+            confidence.style.color =
+                "#9a5a00";
+
+        }
+
+        else {
+
+            confidence.textContent =
+                "⚠ Manual Check";
+
+            confidence.style.background =
+                "#ffe7e7";
+
+            confidence.style.color =
+                "#a61818";
+
+        }
+
+    }
+
+
+    function percentDifference(expected, actual) {
+
+        if (!expected || !actual) {
+            return 999;
+        }
+
+        return (
+            Math.abs(
+                expected - actual
+            )
+            /
+            expected
+        ) * 100;
+
+    }
+
+
+    function markGood(...ids) {
+
+        ids.forEach(id => {
+
+            document
+                .getElementById(id)
+                .classList
+                .add("good");
+
+        });
+
+    }
+
+
+    function markWarning(...ids) {
+
+        ids.forEach(id => {
+
+            document
+                .getElementById(id)
+                .classList
+                .add("warning");
+
+        });
+
+    }
+
+
+    function goodMessage(text) {
+
+        return `
+            <div class="check good">
+                ✓ ${text}
+            </div>
+        `;
+
+    }
+
+
+    function warningMessage(text) {
+
+        return `
+            <div class="check warning">
+                ⚠ ${text}
+            </div>
+        `;
+
+    }
+
+
+    function value(id) {
+
+        return document
+            .getElementById(id)
+            .value
+            .trim();
+
+    }
+
+
+    function numberValue(id) {
+
+        const number =
+            parseFloat(
+                value(id)
+            );
+
+        return Number.isFinite(number)
+            ? number
+            : 0;
+
+    }
+
+
+    // ============================================================
+    // CSV EXPORT
+    // ============================================================
+
+    document
+        .getElementById("csvButton")
+        .addEventListener(
+            "click",
+            exportCSV
+        );
+
+
+    function exportCSV() {
+
+        const headers = [
+            "Date",
+            "Part Number",
+            "Colour",
+            "Net Weight lb",
+            "Net Weight kg",
+            "Gross Weight lb",
+            "Gross Weight kg",
+            "Length ft",
+            "Length m",
+            "Coil ID"
+        ];
+
+
+        const row = [
+
+            new Date()
+                .toLocaleString(),
+
+            value("partNo"),
+
+            value("colour"),
+
+            value("netLb"),
+
+            value("netKg"),
+
+            value("grossLb"),
+
+            value("grossKg"),
+
+            value("lengthFt"),
+
+            value("lengthM"),
+
+            value("coilId")
+
+        ];
+
+
+        const csv =
+            [
+                headers,
+                row
+            ]
+            .map(
+                line =>
+                    line
+                        .map(csvEscape)
+                        .join(",")
+            )
+            .join("\n");
+
+
+        const blob =
+            new Blob(
+                [csv],
+                {
+                    type:
+                        "text/csv;charset=utf-8"
+                }
+            );
+
+
+        const url =
+            URL.createObjectURL(blob);
+
+
+        const link =
+            document.createElement("a");
+
+
+        link.href = url;
+
+        link.download =
+            (
+                value("coilId") ||
+                "coil-stock"
+            ) +
+            ".csv";
+
+
+        document.body.appendChild(link);
+
+        link.click();
+
+        link.remove();
+
+        URL.revokeObjectURL(url);
+
+    }
+
+
+    function csvEscape(value) {
+
+        const string =
+            String(value ?? "");
+
+
+        return (
+            '"' +
+            string.replaceAll(
+                '"',
+                '""'
+            ) +
+            '"'
+        );
+
+    }
+
+</script>
+
+</body>
+</html>
