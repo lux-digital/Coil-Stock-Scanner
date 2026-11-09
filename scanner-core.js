@@ -16,12 +16,16 @@
     return lo.slice(0,-1).concat(hi.slice(0,-1));
   }
   const polygonArea = p => Math.abs(p.reduce((s,a,i)=>{ const b=p[(i+1)%p.length]; return s+a.x*b.y-a.y*b.x; },0)/2);
-  function detectLabel(image) {
-    const {data,width:w,height:h}=image, n=w*h, mask=new Uint8Array(n), seen=new Uint8Array(n), queue=new Int32Array(n);
-    for(let i=0;i<n;i++) {
+  function blueMask(image) {
+    const {data,width:w,height:h}=image, mask=new Uint8Array(w*h);
+    for(let i=0;i<mask.length;i++) {
       const r=data[4*i],g=data[4*i+1],b=data[4*i+2];
       mask[i]=g-r>14 && b-r>17 && g>38 && b>40 && b/g>.76 && b/g<1.8 ? 1:0;
     }
+    return mask;
+  }
+  function detectLabel(image) {
+    const {width:w,height:h}=image, n=w*h, mask=blueMask(image), seen=new Uint8Array(n), queue=new Int32Array(n);
     let best=null;
     for(let seed=0;seed<n;seed++) {
       if(!mask[seed]||seen[seed])continue;
@@ -114,5 +118,5 @@
   function orientationScore(text) {
     const t=text.toUpperCase();return (t.match(/COIL|COATED|STEEL|PART|CSM|CLR|ASTM|VANCOUVER|KOREA|LBS|UNION|NET|GROSS|WEIGHT/g)||[]).length;
   }
-  return {FIELD_IDS,detectLabel,warp,rotate,enhance,crop,orientationScore};
+  return {FIELD_IDS,blueMask,detectLabel,warp,rotate,enhance,crop,orientationScore};
 });
