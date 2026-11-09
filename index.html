@@ -23,7 +23,8 @@
     -->
     <script defer src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
     <script defer src="scanner-core.js?v=2"></script>
-    <script defer src="scanner.js?v=2"></script>
+    <script defer src="diagnostics.js?v=3"></script>
+    <script defer src="scanner.js?v=3"></script>
 
     <style>
         * {
@@ -419,8 +420,13 @@
                 <canvas id="cameraOverlay" aria-hidden="true"></canvas>
             </div>
             <p id="cameraStatus" role="status">Point the camera at the blue label.</p>
-            <div class="buttons"><button class="secondary" id="stopCamera">STOP CAMERA</button></div>
+            <div class="buttons">
+                <button class="primary" id="captureNow">CAPTURE NOW</button>
+                <button class="secondary" id="stopCamera">STOP CAMERA</button>
+            </div>
         </div>
+        <div class="buttons"><button class="secondary" id="saveLiveReport" hidden>DOWNLOAD TEST REPORT</button></div>
+        <p class="subtitle" id="reportHint" hidden>Attach the downloaded ZIP here so I can inspect the camera frame, boundary detection, and OCR results.</p>
 
         <div class="upload-zone">
             <strong>Or take/select a label photo</strong>
@@ -558,6 +564,7 @@
             >
                 SCAN AGAIN
             </button>
+            <button class="secondary" id="saveResultReport">DOWNLOAD TEST REPORT</button>
 
         </div>
 
