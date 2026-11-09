@@ -7,6 +7,45 @@
   const progress = $('progressArea'), bar = $('progressBar'), status = $('progressText');
   const fullCanvas = document.createElement('canvas'), smallCanvas = document.createElement('canvas');
   let image = null, url = null, worker = null, stream = null, cameraTimer = null, scanning = false;
+  let lastLiveImage=null, lastLiveFound=null;
+  let report={startedAt:new Date().toISOString(),source:'none',events:[],images:{},stage:'ready'};
+  function event(name,details={}) {report.events.push({at:new Date().toISOString(),name,...details});if(report.events.length>240)report.events.shift();}
+  function showReportButton(){ $('saveLiveReport').hidden=false;$('reportHint').hidden=false; }
+  function resetReport(source){report={startedAt:new Date().toISOString(),source,events:[],images:{},stage:'ready'};showReportButton();event('new-test');}
+  function frameImage(frame,found,caption='Detection preview') {
+    const c=toCanvas(frame),x=c.getContext('2d');
+    if(found){const corners=found.corners;x.lineWidth=5;x.lineJoin='round';x.strokeStyle='#ffcc32';x.beginPath();x.moveTo(corners[0].x,corners[0].y);
+      for(const p of corners.slice(1))x.lineTo(p.x,p.y);x.closePath();x.stroke();}
+    x.fillStyle='rgba(0,0,0,.78)';x.fillRect(0,0,c.width,35);x.fillStyle='#fff';x.font='16px sans-serif';x.fillText(caption,10,24);
+    return c.toDataURL('image/jpeg',.86);
+  }
+  function maskImage(frame){
+    const mask=core.blueMask(frame),data=new Uint8ClampedArray(frame.width*frame.height*4);
+    for(let i=0;i<mask.length;i++){const n=4*i;data[n]=mask[i]?35:25;data[n+1]=mask[i]?225:25;data[n+2]=mask[i]?236:25;data[n+3]=255;}
+    return toCanvas({data,width:frame.width,height:frame.height}).toDataURL('image/png');
+  }
+  async function downloadReport(){
+    try{
+      if(stream&&video.videoWidth){const frame=imageData(video,640);lastLiveImage=frame;lastLiveFound=core.detectLabel(frame);}
+      if(lastLiveImage){report.images['camera-boundary.jpg']=frameImage(lastLiveImage,lastLiveFound,report.stage);
+        report.images['blue-pixel-mask.png']=maskImage(lastLiveImage);}
+      if(image&&!report.images['original-frame.jpg'])report.images['original-frame.jpg']=toCanvas(imageData(image,2400)).toDataURL('image/jpeg',.86);
+      const metadata={version:'3',exportedAt:new Date().toISOString(),source:report.source,startedAt:report.startedAt,stage:report.stage,
+        browser:navigator.userAgent,screen:{width:screen.width,height:screen.height,devicePixelRatio:devicePixelRatio},
+        viewport:{width:innerWidth,height:innerHeight},
+        camera:report.camera||null,events:report.events,detection:report.detection||null,
+        orientation:report.orientation||null,ocr:report.ocr||null,parsed:report.parsed||null,error:report.error||null,
+        displayedFields:Object.fromEntries(core.FIELD_IDS.map(id=>[id,$(id).value]))};
+      const files=[['README.txt','Coil Scanner test report. Attach this ZIP to the chat. Photos and OCR results stayed on the device until you downloaded this file.\n'],
+        ['diagnostics.json',JSON.stringify(metadata,null,2)],['raw-ocr.txt',$('rawText').textContent||'No OCR result yet.']];
+      for(const [name,dataURL] of Object.entries(report.images))files.push([name,CoilDiagnostics.dataURLBytes(dataURL)]);
+      const blob=CoilDiagnostics.zip(files),downloadURL=URL.createObjectURL(blob),link=document.createElement('a');
+      link.href=downloadURL;link.download='coil-scan-test-'+new Date().toISOString().replace(/[:.]/g,'-')+'.zip';document.body.append(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(downloadURL),60000);
+    }catch(error){console.error(error);alert('Could not create the test report: '+error.message);}
+  }
+  $('saveLiveReport').addEventListener('click',downloadReport);
+  $('saveResultReport').addEventListener('click',downloadReport);
   const blank = () => Object.fromEntries(core.FIELD_IDS.map(id => [id, '']));
   function imageData(image, max) {
     const width=image.naturalWidth||image.videoWidth, height=image.naturalHeight||image.videoHeight;
@@ -27,6 +66,7 @@
   input.addEventListener('change', () => {
     stopCamera();
     const file=input.files[0];if(!file)return;
+    resetReport('photo-picker');event('photo-selected',{type:file.type,bytes:file.size});
     if(url)URL.revokeObjectURL(url);
     url=URL.createObjectURL(file);image=new Image();image.onload=()=>{
       preview.src=url;$('previewWrapper').style.display='block';results.style.display='none';progress.style.display='none';scan.disabled=false;
@@ -36,6 +76,7 @@
     stopCamera();
     image=null;input.value='';preview.removeAttribute('src');$('previewWrapper').style.display='none';results.style.display='none';
     progress.style.display='none';if(url)URL.revokeObjectURL(url);url=null;
+    resetReport('cleared');
   });
   $('rescanButton').addEventListener('click',()=>{results.style.display='none';window.scrollTo({top:0,behavior:'smooth'});});
   async function getWorker() {
@@ -129,19 +170,27 @@
   }
   async function runScan(){
     if(!image||scanning)return;scanning=true;scan.disabled=true;progress.style.display='block';results.style.display='none';progressTo('Finding the blue label...',8);
+    report.stage='detecting';event('scan-start',{imageWidth:image.naturalWidth,imageHeight:image.naturalHeight});
     try {
       if(typeof Tesseract==='undefined')throw new Error('OCR library did not load. Check the internet connection.');
       const small=imageData(image,640),found=core.detectLabel(small);
+      report.detection={imageWidth:small.width,imageHeight:small.height,corners:found?.corners||null,coverage:found?.coverage||null,fill:found?.fill||null,ratio:found?.ratio||null};
+      report.images['scan-blue-mask.png']=maskImage(small);
+      report.images['scan-boundary.jpg']=frameImage(small,found,'Boundary used for OCR');
       if(!found)throw new Error('The blue label could not be found. Move closer, keep the entire label visible, and try again.');
       const full=imageData(image,2400),corners=found.corners.map(p=>({x:p.x*full.width/small.width,y:p.y*full.height/small.height}));
-      let label=core.warp(full,corners),ocr=await getWorker();progressTo('Checking label orientation...',25);
+      let label=core.warp(full,corners),ocr=await getWorker();progressTo('Checking label orientation...',25);report.stage='orientation';
       // The blue border establishes the horizontal axis; OCR establishes which end is the top.
       await ocr.setParameters({tessedit_pageseg_mode:'6',user_defined_dpi:'300'});
       const quick=toCanvas(label),half=toCanvas(core.rotate(label,2));
       const first=(await ocr.recognize(quick)).data.text;
       const second=(await ocr.recognize(half)).data.text;
-      if(core.orientationScore(second)>core.orientationScore(first))label=core.rotate(label,2);
+      const chosen=core.orientationScore(second)>core.orientationScore(first)?180:0;
+      report.orientation={score0:core.orientationScore(first),score180:core.orientationScore(second),chosenDegrees:chosen,text0:first,text180:second};
+      if(chosen)label=core.rotate(label,2);
       const straight=toCanvas(label),enhanced=toCanvas(core.enhance(label));
+      report.images['straightened-label.jpg']=straight.toDataURL('image/jpeg',.9);
+      report.images['enhanced-for-ocr.jpg']=enhanced.toDataURL('image/jpeg',.86);
       $('straightenedPreview').src=straight.toDataURL('image/jpeg',.86);
       progressTo('Reading printed fields...',55);
       const regions={
@@ -162,32 +211,50 @@
         }catch(e){console.debug('Barcode reader unavailable',e);}
       }
       const values=parse(parts);
+      report.ocr={regions,parts};report.parsed=values;report.stage='complete';event('scan-complete');
       $('rawText').textContent=Object.entries(parts).map(([name,value])=>name.toUpperCase()+':\n'+value).join('\n');
       check(values);results.style.display='block';progressTo('Scan complete. Please check the fields against the image.',100);
       results.scrollIntoView({behavior:'smooth',block:'start'});
-    }catch(error){console.error(error);progressTo(error.message||'Could not scan this photo.',0);}
+    }catch(error){console.error(error);report.error={message:error.message,stack:error.stack};report.stage='failed';event('scan-failed',{message:error.message});progressTo(error.message||'Could not scan this photo.',0);}
     finally{scan.disabled=false;scanning=false;}
   }
   scan.addEventListener('click',runScan);
   const video=$('cameraVideo'),overlay=$('cameraOverlay'),cameraStatus=$('cameraStatus');
+  function captureFrame(reason){
+    if(!stream||!video.videoWidth||scanning)return;
+    const frame=lastLiveImage||imageData(video,640),found=lastLiveFound||core.detectLabel(frame);
+    report.images['camera-boundary.jpg']=frameImage(frame,found,'Captured '+reason);
+    report.images['blue-pixel-mask.png']=maskImage(frame);
+    event('camera-capture',{reason,corners:found?.corners||null});
+    const capture=document.createElement('canvas');capture.width=video.videoWidth;capture.height=video.videoHeight;
+    capture.getContext('2d').drawImage(video,0,0);
+    const dataURL=capture.toDataURL('image/jpeg',.9);report.images['original-frame.jpg']=dataURL;
+    stopCamera();image=new Image();image.onload=()=>{preview.src=dataURL;$('previewWrapper').style.display='block';runScan();};image.src=dataURL;
+  }
+  $('captureNow').addEventListener('click',()=>captureFrame('manual'));
   function stopCamera(){
     if(cameraTimer){clearInterval(cameraTimer);cameraTimer=null;}
     if(stream){stream.getTracks().forEach(track=>track.stop());stream=null;}
     video.srcObject=null;$('cameraPanel').hidden=true;$('startCamera').hidden=false;
   }
-  $('stopCamera').addEventListener('click',stopCamera);
+  $('stopCamera').addEventListener('click',()=>{event('camera-stopped');stopCamera();});
   $('startCamera').addEventListener('click',async()=>{
     if(scanning)return;
+    resetReport('live-camera');report.stage='camera-starting';
     if(!navigator.mediaDevices?.getUserMedia){cameraStatus.textContent='Live camera is unavailable. Use the photo picker below.';return;}
     try{
       stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
       video.srcObject=stream;await video.play();
+      const settings=stream.getVideoTracks()[0]?.getSettings()||{};
+      report.camera={width:video.videoWidth,height:video.videoHeight,frameRate:settings.frameRate||null,facingMode:settings.facingMode||null};
+      report.stage='camera-running';event('camera-started',report.camera);
       $('cameraPanel').hidden=false;$('startCamera').hidden=true;
       let last=null,steady=0,busy=false;
       cameraTimer=setInterval(()=>{
         if(busy||scanning||!video.videoWidth)return;busy=true;
         try{
           const img=imageData(video,640),found=core.detectLabel(img);
+          lastLiveImage=img;lastLiveFound=found;
           const c=overlay,context=c.getContext('2d');c.width=c.clientWidth;c.height=c.clientHeight;context.clearRect(0,0,c.width,c.height);
           let acceptable=false;
           if(found){
@@ -200,19 +267,21 @@
             if(acceptable&&last&&p.every((q,i)=>Math.hypot(q.x-last[i].x,q.y-last[i].y)<12))steady++;else steady=0;
             last=acceptable?p.map(q=>({...q})):null;
           }else{steady=0;last=null;}
+          const reason=!found?'no-blue-label-candidate':found.coverage<=.07?'too-small':found.fill<=.57?'low-blue-fill':
+            found.corners.some(q=>q.x<=8||q.y<=8||q.x>=img.width-8||q.y>=img.height-8)?'touches-camera-edge':'candidate-visible';
+          event('camera-frame',{reason,acceptable,steady,frameWidth:img.width,frameHeight:img.height,
+            coverage:found?.coverage||null,fill:found?.fill||null,ratio:found?.ratio||null,corners:found?.corners||null,
+            overlayWidth:c.width,overlayHeight:c.height});
+          if(found&&!report.images['first-boundary.jpg'])report.images['first-boundary.jpg']=frameImage(img,found,'First detected outline');
           cameraStatus.textContent=acceptable?(steady>=2?'Hold still—capturing...':'Label found. Hold still...'):'Point the camera at the full blue label.';
           if(steady>=3){
             clearInterval(cameraTimer);cameraTimer=null;
-            const capture=document.createElement('canvas');capture.width=video.videoWidth;capture.height=video.videoHeight;
-            capture.getContext('2d').drawImage(video,0,0);stopCamera();
-            const dataURL=capture.toDataURL('image/jpeg',.92);image=new Image();image.onload=()=>{
-              preview.src=dataURL;$('previewWrapper').style.display='block';runScan();
-            };image.src=dataURL;
+            captureFrame('automatic');
           }
-        }catch(error){console.error(error);stopCamera();cameraStatus.textContent='Camera preview stopped. Use the photo picker below.';}
+        }catch(error){console.error(error);report.error={message:error.message,stack:error.stack};report.stage='camera-error';event('camera-error',{message:error.message});stopCamera();cameraStatus.textContent='Camera preview stopped. Use the photo picker below.';}
         finally{busy=false;}
       },350);
-    }catch(error){stopCamera();$('startCamera').textContent='RETRY LIVE SCANNER';
+    }catch(error){report.error={message:error.message,stack:error.stack};report.stage='camera-error';event('camera-error',{message:error.message});stopCamera();$('startCamera').textContent='RETRY LIVE SCANNER';
       alert('Camera could not start. Allow camera access in Safari, or use the photo picker below.');console.error(error);}
   });
 })();
