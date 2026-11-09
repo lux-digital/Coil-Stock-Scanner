@@ -46,7 +46,6 @@
   }
   $('saveLiveReport').addEventListener('click',downloadReport);
   $('saveResultReport').addEventListener('click',downloadReport);
-  const blank = () => Object.fromEntries(core.FIELD_IDS.map(id => [id, '']));
   function imageData(image, max) {
     const width=image.naturalWidth||image.videoWidth, height=image.naturalHeight||image.videoHeight;
     const ratio = Math.min(1, max / Math.max(width, height));
@@ -85,61 +84,9 @@
     }}).catch(e=>{worker=null;throw e;});
     return worker;
   }
-  const compact=s=>String(s||'').toUpperCase().replace(/[|]/g,'I').replace(/[“”]/g,'"').replace(/[‘’]/g,"'");
-  const code=s=>compact(s).replace(/[^A-Z0-9]/g,'');
-  function number(s,min=0,max=Infinity) {
-    const t=compact(s).replace(/(?<=\d)[OQ](?=\d)/g,'0').replace(/(?<=\d)[IL](?=\d)/g,'1');
-    const matches=t.match(/\b\d{1,2}\s*[, ]\s*\d{3}\b|\b\d{3,5}\b/g)||[];
-    return matches.map(m=>m.replace(/\D/g,'')).find(n=>Number(n)>=min&&Number(n)<=max)||'';
-  }
-  function parseWeight(text,kind='weight') {
-    const lines=compact(text).split(/\n/).map(x=>x.trim()).filter(Boolean);
-    const min=kind==='length'?100:500,max=kind==='length'?10000:30000;
-    const pounds=lines.map(x=>!/(?:K[G6]|\bM\b)/.test(x)?number(x,min,max):'').find(Boolean)||'';
-    let kg=lines.map(x=>/(?:K[G6]|\bM\b)/.test(x)?number(x,kind==='length'?30:200,kind==='length'?4000:15000):'').find(Boolean)||'';
-    let corrected=false;
-    if(!kg && pounds){
-      const expected=Number(pounds)*(kind==='length'?.3048:.45359237);
-      const kgLine=lines.find(x=>/(?:K[G6]|\bM\b)/.test(x));
-      const long=(kgLine||'').match(/\b\d{5}\b/)?.[0];
-      if(long){
-        const variants=[...long].map((_,i)=>long.slice(0,i)+long.slice(i+1));
-        kg=variants.find(n=>Math.abs(Number(n)-expected)<Math.max(2,expected*.015))||'';
-        corrected=!!kg;
-      }
-    }
-    return [pounds,kg,corrected];
-  }
-  function parse(parts) {
-    const out=blank();let lines=compact(parts.left).split(/\n/).map(x=>x.trim());
-    const candidates=lines.flatMap(x=>x.match(/\bL[0-9OQI]{3,6}[A-Z]\b/g)||[]);
-    if(candidates.length)out.partNo=candidates[0].replace(/[OQ]/g,'0').replace(/I/g,'1');
-    const right=compact(parts.right).split(/\n/).map(x=>x.trim()).filter(Boolean);
-    const colorLine=right.find(x=>/(?:HEMLOCK|ONYX|SUEDE|CHERRY|CEDAR|DRIFTWOOD|CYPRESS|JW\d{2}[A-Z0-9]{4,})/.test(x))||
-      right.find(x=>/(?:CSM[_\s]*CLR|CSM[_\s]*CIR|COLOUR NAME)/.test(x)&&x.length>15);
-    if(colorLine){
-      out.colour=colorLine.replace(/^.*?(?=HEMLOCK|BLACK|SUEDE|CLASSIC|PVDF|DRIFTWOOD|JW\d{2})/,'')
-        .replace(/\s*(?:COATG|COATING|150\s*G\/M).*$/,'').replace(/[\/|\s-]+$/,'').replace(/\s+/g,' ').trim();
-      if(out.colour.length>40||out.colour.length<4)out.colour='';
-    }
-    out.review=[];
-    let pair=parseWeight(parts.net);[out.netLb,out.netKg]=pair;if(pair[2])out.review.push('netKg');
-    pair=parseWeight(parts.gross);[out.grossLb,out.grossKg]=pair;if(pair[2])out.review.push('grossKg');
-    pair=parseWeight(parts.length,'length');[out.lengthFt,out.lengthM]=pair;if(pair[2])out.review.push('lengthM');
-    if(out.netLb&&out.grossLb&&Number(out.grossLb)-Number(out.netLb)>5000){
-      const original=out.grossLb;
-      const variants=[...original].flatMap((c,i)=>'0123456789'.split('').map(d=>original.slice(0,i)+d+original.slice(i+1)));
-      const candidate=variants.find(v=>Number(v)-Number(out.netLb)>=40&&Number(v)-Number(out.netLb)<=1200);
-      if(candidate){out.grossLb=candidate;out.review.push('grossLb');}
-    }
-    const ids=compact((parts.barcodeText||'')+'\n'+parts.id).match(/\b[A-Z0-9]{6,10}\b/g)||[];
-    const valid=ids.find(x=>/^[A-Z][A-Z0-9]{5,8}$/.test(x)&&/\d/.test(x)&&!/^COIL/.test(x));
-    if(valid)out.coilId=valid;
-    return out;
-  }
   function check(data) {
     const messages=[],bad=new Set(),confirmed=new Set(),numeric=id=>Number(data[id]);
-    for(const id of data.review||[]){bad.add(id);messages.push('Check the corrected '+$(id).previousElementSibling.textContent.toLowerCase()+' against the label.');}
+    for(const id of data.review||[]){bad.add(id);messages.push('Check '+$(id).previousElementSibling.textContent.toLowerCase()+' against the label.');}
     for(const [a,b,f,name] of [['netLb','netKg',.45359237,'Net weight'],['grossLb','grossKg',.45359237,'Gross weight'],['lengthFt','lengthM',.3048,'Length']]) {
       if(!data[a]||!data[b]){bad.add(a);bad.add(b);continue;}
       if(Math.abs(numeric(a)*f-numeric(b))>Math.max(2,numeric(b)*.015)){
@@ -181,7 +128,7 @@
       const full=imageData(image,2400),corners=found.corners.map(p=>({x:p.x*full.width/small.width,y:p.y*full.height/small.height}));
       let label=core.warp(full,corners),ocr=await getWorker();progressTo('Checking label orientation...',25);report.stage='orientation';
       // The blue border establishes the horizontal axis; OCR establishes which end is the top.
-      await ocr.setParameters({tessedit_pageseg_mode:'6',user_defined_dpi:'300'});
+      await ocr.setParameters({tessedit_pageseg_mode:'6',user_defined_dpi:'300',tessedit_char_whitelist:''});
       const quick=toCanvas(label),half=toCanvas(core.rotate(label,2));
       const first=(await ocr.recognize(quick)).data.text;
       const second=(await ocr.recognize(half)).data.text;
@@ -194,11 +141,16 @@
       $('straightenedPreview').src=straight.toDataURL('image/jpeg',.86);
       progressTo('Reading printed fields...',55);
       const regions={
-        left:[.025,.14,.44,.25],right:[.61,.33,.38,.25],
-        net:[.025,.53,.195,.14],gross:[.22,.53,.195,.14],
-        length:[.405,.53,.165,.14],id:[.33,.62,.33,.16]
+        left:[.025,.14,.44,.25],right:[.57,.37,.40,.35],
+        net:[.04,.53,.20,.14],gross:[.22,.53,.22,.14],
+        length:[.42,.53,.20,.14],id:[.33,.62,.33,.16],
+        idTight:[.39,.655,.22,.095]
       };
-      const parts={};for(const [key,rect] of Object.entries(regions))parts[key]=await recognizeRegion(ocr,enhanced,rect);
+      const parts={};for(const [key,rect] of Object.entries(regions)){
+        if(key!=='idTight')parts[key]=await recognizeRegion(ocr,enhanced,rect);
+      }
+      // The original colour and kilogram print is sometimes sharper than the contrast-enhanced copy.
+      for(const key of ['right','net','gross','length'])parts[key+'Alt']=await recognizeRegion(ocr,straight,regions[key]);
       await ocr.setParameters({tessedit_pageseg_mode:'7'});
       parts.barcodeText=(await ocr.recognize(enhanced,{rectangle:{left:Math.round(enhanced.width*.23),top:Math.round(enhanced.height*.84),width:Math.round(enhanced.width*.40),height:Math.round(enhanced.height*.055)}})).data.text;
       if(typeof BarcodeDetector!=='undefined'){
@@ -206,11 +158,16 @@
           const formats=await BarcodeDetector.getSupportedFormats();
           if(formats.includes('code_39')){
             const codes=await new BarcodeDetector({formats:['code_39']}).detect(straight);
-            parts.barcodeText=(codes.find(x=>/^[A-Z][A-Z0-9]{5,8}$/.test(x.rawValue.replace(/\*/g,'')))?.rawValue||parts.barcodeText);
+            const decoded=codes.find(x=>/^[A-Z][A-Z0-9]{5,8}$/.test(x.rawValue.replace(/\*/g,'')))?.rawValue.replace(/\*/g,'');
+            if(decoded){parts.barcodeDecoded=decoded;parts.barcodeText=decoded;}
           }
         }catch(e){console.debug('Barcode reader unavailable',e);}
       }
-      const values=parse(parts);
+      await ocr.setParameters({tessedit_pageseg_mode:'7',tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'});
+      parts.idTight=(await ocr.recognize(straight,{rectangle:{left:Math.round(straight.width*regions.idTight[0]),top:Math.round(straight.height*regions.idTight[1]),
+        width:Math.round(straight.width*regions.idTight[2]),height:Math.round(straight.height*regions.idTight[3])}})).data.text;
+      await ocr.setParameters({tessedit_char_whitelist:''});
+      const values=CoilParser.parse(parts);
       report.ocr={regions,parts};report.parsed=values;report.stage='complete';event('scan-complete');
       $('rawText').textContent=Object.entries(parts).map(([name,value])=>name.toUpperCase()+':\n'+value).join('\n');
       check(values);results.style.display='block';progressTo('Scan complete. Please check the fields against the image.',100);
