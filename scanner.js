@@ -6,7 +6,7 @@
   const input = $('imageInput'), preview = $('preview'), scan = $('scanButton'), results = $('resultsCard');
   const progress = $('progressArea'), bar = $('progressBar'), status = $('progressText');
   const fullCanvas = document.createElement('canvas'), smallCanvas = document.createElement('canvas');
-  let image = null, url = null, worker = null, stream = null, cameraTimer = null, scanning = false;
+  let image = null, url = null, worker = null, stream = null, cameraTimer = null, captureTimer = null, scanning = false;
   let lastLiveImage=null, lastLiveFound=null;
   let report={startedAt:new Date().toISOString(),source:'none',events:[],images:{},stage:'ready'};
   function event(name,details={}) {report.events.push({at:new Date().toISOString(),name,...details});if(report.events.length>240)report.events.shift();}
@@ -220,7 +220,7 @@
   }
   scan.addEventListener('click',runScan);
   const video=$('cameraVideo'),overlay=$('cameraOverlay'),cameraStatus=$('cameraStatus');
-  function captureFrame(reason){
+  function captureFrame(reason, showCheckFor=0){
     if(!stream||!video.videoWidth||scanning)return;
     const frame=lastLiveImage||imageData(video,640),found=lastLiveFound||core.detectLabel(frame);
     report.images['camera-boundary.jpg']=frameImage(frame,found,'Captured '+reason);
@@ -229,11 +229,13 @@
     const capture=document.createElement('canvas');capture.width=video.videoWidth;capture.height=video.videoHeight;
     capture.getContext('2d').drawImage(video,0,0);
     const dataURL=capture.toDataURL('image/jpeg',.9);report.images['original-frame.jpg']=dataURL;
-    stopCamera();image=new Image();image.onload=()=>{preview.src=dataURL;$('previewWrapper').style.display='block';runScan();};image.src=dataURL;
+    const finish=()=>{captureTimer=null;stopCamera();image=new Image();image.onload=()=>{preview.src=dataURL;$('previewWrapper').style.display='block';runScan();};image.src=dataURL;};
+    if(showCheckFor)captureTimer=setTimeout(finish,showCheckFor);else finish();
   }
   $('captureNow').addEventListener('click',()=>captureFrame('manual'));
   function stopCamera(){
     if(cameraTimer){clearInterval(cameraTimer);cameraTimer=null;}
+    if(captureTimer){clearTimeout(captureTimer);captureTimer=null;}
     if(stream){stream.getTracks().forEach(track=>track.stop());stream=null;}
     video.srcObject=null;$('cameraPanel').hidden=true;$('startCamera').hidden=false;
   }
@@ -259,24 +261,35 @@
           let acceptable=false;
           if(found){
             const p=found.corners;
-            acceptable=found.coverage>.07&&found.fill>.57&&p.every(q=>q.x>8&&q.y>8&&q.x<img.width-8&&q.y<img.height-8);
+            acceptable=core.labelReady(found,img.width,img.height);
             const scale=Math.min(c.width/img.width,c.height/img.height),dx=(c.width-img.width*scale)/2,dy=(c.height-img.height*scale)/2;
-            context.strokeStyle=acceptable?'#40e58c':'#ffcf50';context.lineWidth=5;context.lineJoin='round';context.beginPath();
+            context.lineWidth=5;context.lineJoin='round';context.beginPath();
             context.moveTo(dx+p[0].x*scale,dy+p[0].y*scale);
-            for(const q of p.slice(1))context.lineTo(dx+q.x*scale,dy+q.y*scale);context.closePath();context.stroke();
+            for(const q of p.slice(1))context.lineTo(dx+q.x*scale,dy+q.y*scale);context.closePath();
             if(acceptable&&last&&p.every((q,i)=>Math.hypot(q.x-last[i].x,q.y-last[i].y)<12))steady++;else steady=0;
             last=acceptable?p.map(q=>({...q})):null;
+            const recognized=acceptable&&steady>=3;
+            if(recognized){context.fillStyle='rgba(16, 185, 92, .30)';context.fill();}
+            context.strokeStyle=recognized?'#00d967':'#ffcf50';context.lineWidth=5;context.stroke();
+            if(recognized){
+              const center=p.reduce((sum,q)=>({x:sum.x+q.x/4,y:sum.y+q.y/4}),{x:0,y:0});
+              const cx=dx+center.x*scale,cy=dy+center.y*scale,r=Math.max(23,Math.min(36,Math.min(c.width,c.height)*.075));
+              context.fillStyle='#00a94f';context.beginPath();context.arc(cx,cy,r,0,Math.PI*2);context.fill();
+              context.strokeStyle='#fff';context.lineWidth=7;context.lineCap='round';context.beginPath();
+              context.moveTo(cx-r*.45,cy);context.lineTo(cx-r*.10,cy+r*.33);context.lineTo(cx+r*.52,cy-r*.40);context.stroke();
+            }
           }else{steady=0;last=null;}
-          const reason=!found?'no-blue-label-candidate':found.coverage<=.07?'too-small':found.fill<=.57?'low-blue-fill':
-            found.corners.some(q=>q.x<=8||q.y<=8||q.x>=img.width-8||q.y>=img.height-8)?'touches-camera-edge':'candidate-visible';
+          const margin=Math.max(4,Math.round(Math.min(img.width,img.height)*.012));
+          const reason=!found?'no-blue-label-candidate':found.coverage<.10?'too-small':found.fill<.68||found.fill>1.08?'unreliable-shape':
+            found.corners.some(q=>q.x<margin||q.y<margin||q.x>=img.width-margin||q.y>=img.height-margin)?'touches-camera-edge':'candidate-visible';
           event('camera-frame',{reason,acceptable,steady,frameWidth:img.width,frameHeight:img.height,
             coverage:found?.coverage||null,fill:found?.fill||null,ratio:found?.ratio||null,corners:found?.corners||null,
             overlayWidth:c.width,overlayHeight:c.height});
           if(found&&!report.images['first-boundary.jpg'])report.images['first-boundary.jpg']=frameImage(img,found,'First detected outline');
-          cameraStatus.textContent=acceptable?(steady>=2?'Hold still—capturing...':'Label found. Hold still...'):'Point the camera at the full blue label.';
+          cameraStatus.textContent=steady>=3?'✓ Label recognized. Scanning...':acceptable?'Label found. Hold still...':reason==='touches-camera-edge'?'Move back until the whole label fits.':'Point the camera at the full blue label.';
           if(steady>=3){
             clearInterval(cameraTimer);cameraTimer=null;
-            captureFrame('automatic');
+            captureFrame('automatic',750);
           }
         }catch(error){console.error(error);report.error={message:error.message,stack:error.stack};report.stage='camera-error';event('camera-error',{message:error.message});stopCamera();cameraStatus.textContent='Camera preview stopped. Use the photo picker below.';}
         finally{busy=false;}
