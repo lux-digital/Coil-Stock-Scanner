@@ -34,6 +34,22 @@
     const a=readings(primary,kind),b=readings(alternative,kind);
     const pounds=[...a.pounds,...b.pounds],other=[...a.other,...b.other];
     const factor=kind==='length'?.3048:.45359237;
+    const repaired=new Set(),max=kind==='length'?4000:15000;
+    // OCR sometimes inserts one digit into the small metric line (3,730 -> 37,730).
+    // Only use a deletion when the printed imperial value independently confirms it.
+    for(const text of [primary,alternative])for(const line of upper(text).split(/\n/)) {
+      if(!(kind==='length'?/M\d?\b/:/K[G6E]/).test(line))continue;
+      for(const match of line.matchAll(/\b\d{5}\b/g)) {
+        if(Number(match[0])<=max)continue;
+        for(const lb of pounds) {
+          const expected=Number(lb)*factor,limit=Math.max(1.5,expected*.0005);
+          const variants=new Set([...match[0]].map((_,i)=>match[0].slice(0,i)+match[0].slice(i+1)));
+          for(const value of variants)if(Number(value)<=max && Math.abs(Number(value)-expected)<=limit){
+            other.push(value);repaired.add(value);
+          }
+        }
+      }
+    }
     let chosen=null;
     for(const lb of pounds)for(const metric of other) {
       const error=Math.abs(Number(lb)*factor-Number(metric));
@@ -42,7 +58,7 @@
     if(!chosen)return [pounds[0]||'',other[0]||'',true];
     const limit=Math.max(3,Number(chosen.metric)*.015);
     if(chosen.error>limit)return [chosen.lb,'',true];
-    return [chosen.lb,chosen.metric,chosen.error>2];
+    return [chosen.lb,chosen.metric,chosen.error>2||repaired.has(chosen.metric)];
   }
   function coilId(parts) {
     const text=upper([parts.idTight,parts.barcodeText,parts.id].join('\n'));
