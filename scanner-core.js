@@ -20,7 +20,7 @@
     const {data,width:w,height:h}=image, mask=new Uint8Array(w*h);
     for(let i=0;i<mask.length;i++) {
       const r=data[4*i],g=data[4*i+1],b=data[4*i+2];
-      mask[i]=g-r>14 && b-r>17 && g>38 && b>40 && b/g>.76 && b/g<1.8 ? 1:0;
+      mask[i]=g-r>28 && b-r>32 && g>50 && b>55 && b/g>.76 && b/g<1.8 ? 1:0;
     }
     return mask;
   }
@@ -58,6 +58,11 @@
       if(!best||score>best.score)best={corners:poly,score,coverage:area/n,fill,ratio};
     }
     return best;
+  }
+  function labelReady(found, width, height) {
+    if (!found || found.coverage < .10 || found.fill < .68 || found.fill > 1.08) return false;
+    const margin = Math.max(4, Math.round(Math.min(width, height) * .012));
+    return found.corners.every(p => p.x >= margin && p.y >= margin && p.x < width-margin && p.y < height-margin);
   }
   function solve(a,b) {
     const n=b.length,m=a.map((row,i)=>[...row,b[i]]);
@@ -118,5 +123,5 @@
   function orientationScore(text) {
     const t=text.toUpperCase();return (t.match(/COIL|COATED|STEEL|PART|CSM|CLR|ASTM|VANCOUVER|KOREA|LBS|UNION|NET|GROSS|WEIGHT/g)||[]).length;
   }
-  return {FIELD_IDS,blueMask,detectLabel,warp,rotate,enhance,crop,orientationScore};
+  return {FIELD_IDS,blueMask,detectLabel,labelReady,warp,rotate,enhance,crop,orientationScore};
 });
