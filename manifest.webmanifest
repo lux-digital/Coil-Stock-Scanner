@@ -1,0 +1,10 @@
+{
+  "name": "Coil Stock Scanner",
+  "short_name": "Coil Scanner",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f2f3f5",
+  "theme_color": "#151515",
+  "icons": [{"src": "coil-icon.png", "sizes": "any", "type": "image/png", "purpose": "any"}]
+}
