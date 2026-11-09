@@ -9,6 +9,12 @@
     >
 
     <title>Coil Stock Scanner</title>
+    <meta name="theme-color" content="#151515">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Coil Scanner">
+    <link rel="apple-touch-icon" href="coil-icon.png?v=2">
+    <link rel="icon" type="image/png" href="coil-icon.png?v=2">
+    <link rel="manifest" href="manifest.webmanifest">
 
     <!--
         Tesseract.js
@@ -16,8 +22,8 @@
         That means this test needs an internet connection.
     -->
     <script defer src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
-    <script defer src="scanner-core.js"></script>
-    <script defer src="scanner.js"></script>
+    <script defer src="scanner-core.js?v=2"></script>
+    <script defer src="scanner.js?v=2"></script>
 
     <style>
         * {
@@ -137,6 +143,10 @@
             display: none;
             margin-top: 18px;
         }
+        .camera-frame { position: relative; margin-top: 15px; height: 62vh; background: #101820; border-radius: 14px; overflow: hidden; }
+        #cameraVideo { display: block; width: 100%; height: 100%; object-fit: contain; }
+        #cameraOverlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+        #cameraStatus { margin: 10px 0 0; color: #555; font-size: 14px; }
 
         #preview {
             width: 100%;
@@ -402,9 +412,18 @@
     </header>
 
     <section class="card">
+        <button class="primary" id="startCamera">START LIVE SCANNER</button>
+        <div id="cameraPanel" hidden>
+            <div class="camera-frame">
+                <video id="cameraVideo" autoplay muted playsinline aria-label="Live camera view"></video>
+                <canvas id="cameraOverlay" aria-hidden="true"></canvas>
+            </div>
+            <p id="cameraStatus" role="status">Point the camera at the blue label.</p>
+            <div class="buttons"><button class="secondary" id="stopCamera">STOP CAMERA</button></div>
+        </div>
 
         <div class="upload-zone">
-            <strong>Take or select a label photo</strong>
+            <strong>Or take/select a label photo</strong>
             <span>
                 Fill as much of the image as possible with the blue stock label.
             </span>
