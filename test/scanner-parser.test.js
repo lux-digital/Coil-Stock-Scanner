@@ -32,3 +32,17 @@ assert.equal(mismatch.netKg,'');
 const metricOnly=parse({gross:'[ 4,610 Ke ]'});
 assert.equal(metricOnly.grossLb,'');
 assert.equal(metricOnly.grossKg,'4610');
+
+// The follow-up phone report added a stray digit to both printed kilogram values.
+const followup=parse({
+  left:'LPL202608051\nL2486V',right:'CSM_CIR PVDF PRINT CEDAR(\nPW15I',
+  net:'8,224 LBS\n[ 37730 kg ]',netAlt:'8,224 LBS\n[ 35730 kg ]',
+  gross:'G.WT 8,466 LBS\n[ 35840 Kg ]',
+  length:'2166 FT\n[660 M]',idTight:'J7UA40B'
+});
+assert.deepEqual([followup.netLb,followup.netKg,followup.grossLb,followup.grossKg],
+  ['8224','3730','8466','3840']);
+assert(followup.review.includes('netKg') && followup.review.includes('grossKg'));
+
+// A conflicting OCR reading must not become a guessed metric weight.
+assert.equal(parse({net:'8,224 LBS\n[ 39,999 kg ]'}).netKg,'');
