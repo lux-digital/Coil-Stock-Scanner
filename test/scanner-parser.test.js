@@ -46,3 +46,18 @@ assert(followup.review.includes('netKg') && followup.review.includes('grossKg'))
 
 // A conflicting OCR reading must not become a guessed metric weight.
 assert.equal(parse({net:'8,224 LBS\n[ 39,999 kg ]'}).netKg,'');
+
+// A later photo had correct numeric OCR, but its large coil ID and colour code were misread.
+const later=parse({
+  left:'L2486V',right:'PVDF PRINT KONA(P\nPW1SL',rightAlt:'PVDF PRINT KONA(P\nPW1SL',
+  idTight:'J7TRAGOA',idUpscaled:'J7TA40X',colourCodeTight:'PW15L',
+  net:'9,084 LBS\n[ 45120 Kg ]',netAlt:'9,084 LBS\n[ 4120 Kg ]',
+  gross:'9,326 LBS\n[ 4,230 Kg ]',length:'2396 FT\n[ 730 M ]'
+});
+assert.equal(later.coilId,'J7TA40X');
+assert.equal(later.colour,'PW15L');
+assert(!later.review.includes('netKg'));
+assert.equal(parse({idTight:'J7TRAGOA'}).coilId,'');
+
+// Keep the original colour reading if the isolated crop misreads a valid code.
+assert.equal(parse({right:'PVDF PRINT CEDAR(\nPW15I',colourCodeTight:'PW15T'}).colour,'PW15I');
