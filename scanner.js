@@ -115,6 +115,13 @@
     await ocr.setParameters({tessedit_pageseg_mode:'6',user_defined_dpi:'300'});
     return (await ocr.recognize(canvas,{rectangle:{left:Math.round(rect[0]*canvas.width),top:Math.round(rect[1]*canvas.height),width:Math.round(rect[2]*canvas.width),height:Math.round(rect[3]*canvas.height)}})).data.text;
   }
+  async function recognizeEnlarged(ocr,canvas,rect) {
+    const crop=document.createElement('canvas');
+    crop.width=Math.round(canvas.width*rect[2]*3);crop.height=Math.round(canvas.height*rect[3]*3);
+    crop.getContext('2d').drawImage(canvas,rect[0]*canvas.width,rect[1]*canvas.height,
+      rect[2]*canvas.width,rect[3]*canvas.height,0,0,crop.width,crop.height);
+    return (await ocr.recognize(crop)).data.text;
+  }
   async function runScan(){
     if(!image||scanning)return;scanning=true;scan.disabled=true;progress.style.display='block';results.style.display='none';progressTo('Finding the blue label...',8);
     report.stage='detecting';event('scan-start',{imageWidth:image.naturalWidth,imageHeight:image.naturalHeight});
@@ -166,6 +173,9 @@
       await ocr.setParameters({tessedit_pageseg_mode:'7',tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'});
       parts.idTight=(await ocr.recognize(straight,{rectangle:{left:Math.round(straight.width*regions.idTight[0]),top:Math.round(straight.height*regions.idTight[1]),
         width:Math.round(straight.width*regions.idTight[2]),height:Math.round(straight.height*regions.idTight[3])}})).data.text;
+      parts.idUpscaled=await recognizeEnlarged(ocr,straight,[.395,.642,.225,.096]);
+      await ocr.setParameters({tessedit_pageseg_mode:'8'});
+      parts.colourCodeTight=await recognizeEnlarged(ocr,straight,[.675,.595,.095,.07]);
       await ocr.setParameters({tessedit_char_whitelist:''});
       const values=CoilParser.parse(parts);
       report.ocr={regions,parts};report.parsed=values;report.stage='complete';event('scan-complete');
