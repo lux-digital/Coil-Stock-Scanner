@@ -8,7 +8,8 @@
   const FIELDS = ['partNo','coilId','colour','netLb','netKg','grossLb','grossKg','lengthFt','lengthM'];
   const upper = text => String(text || '').toUpperCase().replace(/[|]/g,'I').replace(/[“”]/g,'"');
   function numbers(text, min, max) {
-    return [...upper(text).replace(/(?<=\d|\d[, .]\s*)[OQ](?=\d|\b)/g,'0').replace(/(?<=\d)[IL](?=\d|\b)/g,'1')
+    return [...upper(text).replace(/(\b\d{1,2})\s+[A-Z]\s+(\d{3})\s*(?=LBS?\b)/g,'$1,$2 ')
+      .replace(/(?<=\d|\d[, .]\s*)[OQ](?=\d|\b)/g,'0').replace(/(?<=\d)[IL](?=\d|\b)/g,'1')
       .replace(/(?<=\d[, .]\s*)P(?=\d)/g,'0')
       .matchAll(/(?<!\d)\d{1,2}\s*[, .]\s*\d{3}\b|(?<!\d)\d{3,5}\b/g)]
       .map(match => String(Number(match[0].replace(/\D/g,''))))
@@ -19,6 +20,8 @@
     const otherMin=kind==='length'?30:200,otherMax=kind==='length'?4000:15000;
     const lines=upper(text).split(/\n/).map(s=>s.trim()).filter(Boolean);
     for(const line of lines) {
+      // Serial numbers beneath the weight row contain plausible four-digit fragments.
+      if(/\b(?:COIL\s*(?:ID|NO)|E\d{6,}|\d{4,}-\d)/.test(line)&&!/\b(?:LBS?|G\.?(?:WT|W)|N\.?(?:WT|W))\b/.test(line))continue;
       const isOther=kind==='length'?/(?:\bM\b|\d\s*M(?:M\b|ET|E)?)/.test(line):/K[G6E]/.test(line);
       const main=numbers(line,min,max),secondary=numbers(line,otherMin,otherMax);
       if(isOther) {
@@ -59,13 +62,19 @@
     }
     if(!chosen)return [pounds[0]||'',other[0]||'',true];
     const limit=kind==='length'?2:6;
-    if(chosen.error>limit)return [chosen.lb,'',true];
+    if(chosen.error>limit){
+      // A three-digit OCR fragment cannot be a 9,000 lb coil beside a 4,000 kg reading.
+      if(chosen.error>Number(chosen.metric)*.15&&Number(chosen.lb)<2000)return ['',chosen.metric,true];
+      return [chosen.lb,'',true];
+    }
     return [chosen.lb,chosen.metric,chosen.error>2||(repaired.has(chosen.metric)&&!direct.has(chosen.metric))];
   }
   function coilId(parts) {
-    const candidateText=[parts.idTight,parts.idUpscaled,parts.idWide,parts.barcodeText,parts.fullText,parts.id]
-      .map(text=>upper(text).replace(/\bJ\s+(?=[0-9OQILSB])/, 'J'));
-    const candidates=candidateText.flatMap(text=>text.match(/J[A-Z0-9]{6}(?![A-Z0-9])/g)||[]);
+    const candidateText=[parts.idTight,parts.idUpscaled,parts.idWide,parts.barcodeText,parts.id,parts.fullText,parts.idRaw]
+      .map(text=>upper(text).replace(/\bJ\s+S(?=[0-9OQIL][A-Z0-9]{5})/g,'J')
+        .replace(/\b([JH])\s+(?=[0-9OQILSB])/g,'$1')
+        .replace(/([JH][0-9OQIL][A-Z0-9]{2}[0-9OQILS])\s+(?=[0-9OQILS][A-Z0-9])/g,'$1'));
+    const candidates=candidateText.flatMap(text=>text.match(/[JH][A-Z0-9]{6}(?![A-Z0-9])/g)||[]);
     const valid=value=>/^[A-Z][0-9OQIL][A-Z0-9]{2}[0-9OQILS]{2}[A-Z0-9OQILS]$/.test(value);
     const value=(parts.barcodeDecoded&&upper(parts.barcodeDecoded))||
       candidates.find(valid)||candidates[0];
@@ -74,7 +83,8 @@
     if(parts.barcodeDecoded && value===upper(parts.barcodeDecoded))return {value,review:false};
     if(value.length!==7 || !valid(value))return {value:'',review:true};
     const normalized=[...value].map((c,i)=>[1,4,5].includes(i)?({'O':'0','Q':'0','I':'1','L':'1','S':'5'}[c]||c):c).join('');
-    return {value:normalized,review:normalized!==value};
+    const rawFallback=!!parts.idRaw&&!candidateText.slice(0,-1).some(text=>text.includes(value));
+    return {value:normalized,review:normalized!==value||rawFallback};
   }
   function colour(text, alternate) {
     const lines=upper(text).split(/\n/).map(s=>s.trim()).filter(Boolean);
@@ -85,14 +95,14 @@
       if(marker && line.slice(marker.index+marker[0].length).trim()) {
         name=line.slice(marker.index+marker[0].length);break;
       }
-      if(/\b(?:PVDF\s+PRINT|KNOTTY\s+CHESTNUT|KNOTTY\s+TEAK|CHAMPAGNE\s+WAVE|STARLIGHT|HEMLOCK|BLACK\s+ONYX|WHITE\s+OAK|PECAN|ONYX|SUEDE|CHERRY|CEDAR|DRIFTWOOD|CYPRESS)\b/.test(line)) {
-        name=line.slice(line.search(/\b(?:PVDF|KNOTTY\s+CHESTNUT|KNOTTY\s+TEAK|CHAMPAGNE\s+WAVE|STARLIGHT|HEMLOCK|BLACK\s+ONYX|WHITE\s+OAK|PECAN|ONYX|SUEDE|CHERRY|CEDAR|DRIFTWOOD|CYPRESS)\b/));break;
+      if(/\b(?:PVDF\s+PRINT|KNOTTY\s+CHESTNUT|KNOTTY\s+TEAK|CHAMPAGNE\s+WAVE|STARLIGHT|HEMLOCK|WALNUT|BLACK\s+ONYX|WHITE\s+OAK|PECAN|ONYX|SUEDE|CHERRY|CEDAR|DRIFTWOOD|CYPRESS)\b/.test(line)) {
+        name=line.slice(line.search(/\b(?:PVDF|KNOTTY\s+CHESTNUT|KNOTTY\s+TEAK|CHAMPAGNE\s+WAVE|STARLIGHT|HEMLOCK|WALNUT|BLACK\s+ONYX|WHITE\s+OAK|PECAN|ONYX|SUEDE|CHERRY|CEDAR|DRIFTWOOD|CYPRESS)\b/));break;
       }
     }
     name=name.replace(/^[\s=:;|\\]+/,'').replace(/\s*(?:COATG|COATING|150\s*G\/M).*$/,'')
       .replace(/[|\\;.,/\s]+$/,'').replace(/\s+/g,' ').trim();
     const codeLine=codeLines.find(line=>/\b(?:COL(?:OU)?R\s*TOP|COLOR\s*TOP)\b/.test(line))||'';
-    const codePattern=/\b(?:PW|PC|PS|KT)(?:[0-9OQ]{3}|[0-9OQ]{2}[A-Z])\b/g;
+    const codePattern=/\b(?:PW|PC|PS|KT|JW|IW)(?:[0-9OQ]{3}|[0-9OQ]{2}[A-Z])\b/g;
     const colourCodes=codeLines.concat(upper(alternate?.colourCodeTight),upper(alternate?.fullText)).flatMap(line=>
       line.match(codePattern)||[]);
     const codeRaw=(codeLine.match(codePattern)||[])[0]||
@@ -118,6 +128,8 @@
     const uncertainSuffix=/\s\/\s[A-Z]$/.test(name);
     if(uncertainSuffix&&!/\s\/\sB$/.test(name))name=name.replace(/\s*\/\s*[A-Z]$/,'');
     if(name.length>=4&&name.length<=48)return {value:name,review:incomplete||corrected||uncertainSuffix};
+    const printedColour=codeLines.flatMap(line=>line.match(/\b(?:JW|IW)[0-9OQ]{2}[A-Z]{1,2}\d{3,5}[A-Z]?\b/g)||[])[0];
+    if(printedColour)return {value:printedColour,review:true};
     return {value:code,review:!!code};
   }
   function parse(parts) {
@@ -134,21 +146,32 @@
     if(/\b1[0-9OQI]{3,6}[A-Z]\b/.test(upper(parts.left)))out.review.push('partNo');
     const id=coilId(parts);out.coilId=id.value;if(id.review)out.review.push('coilId');
     const color=colour(parts.right,{text:parts.rightAlt,colourCodeTight:parts.colourCodeTight,fullText:parts.fullText});out.colour=color.value;if(color.review)out.review.push('colour');
+    if(!out.partNo){const fromFull=upper(parts.fullText).match(/\bL[0-9OQI]{3,5}[A-Z]\b/);
+      if(fromFull){out.partNo=normalizePart(fromFull[0]);out.review.push('partNo');}}
+    const row=upper([parts.weightBand,parts.fullText].filter(Boolean).join('\n')).split(/\n/)
+      .find(line=>/\bLBS?\b/.test(line)&&numbers(line,1000,30000).length>=2);
+    const rowNumbers=row?numbers(row,1000,30000):[];
     for(const [source,alt,kind,a,b] of [
       ['net','netAlt','weight','netLb','netKg'],
       ['gross','grossAlt','weight','grossLb','grossKg'],
       ['length','lengthAlt','length','lengthFt','lengthM']]) {
-      const alternative=[parts[alt],parts[source+'MetricTight']].filter(Boolean).join('\n');
+      const fallback=kind==='weight'&&rowNumbers.length>=2?rowNumbers[source==='net'?0:1]+' LBS':'';
+      const alternative=[parts[alt],parts[source+'Wide'],parts[source+'Upper'],parts[source+'MetricTight'],parts[source+'MetricLower'],fallback].filter(Boolean).join('\n');
       const result=pair(parts[source],alternative,kind);
       out[a]=result[0];out[b]=result[1];
-      if(result[2]&&out[b])out.review.push(b);
+      if(result[2])out.review.push(out[b]?b:a);
     }
     // The first full-label OCR pass sometimes reads a metric value that its small crop misses.
-    const fullMetric=[...upper(parts.fullText).matchAll(/([\d,.\s]{3,9})\s*K[G6E]\b/g)]
+    const fullMetric=[...upper([parts.fullText,parts.weightBand].join('\n')).matchAll(/([\d,.\s]{3,9})\s*K[G6E]\b/g)]
       .flatMap(match=>numbers(match[1],200,15000));
     for(const [lb,kg] of [['netLb','netKg'],['grossLb','grossKg']])if(out[lb]&&!out[kg]){
       const matches=[...new Set(fullMetric.filter(value=>Math.abs(Number(out[lb])*.45359237-Number(value))<=6))];
       if(matches.length===1){out[kg]=matches[0];out.review.push(kg);}
+    }
+    if(out.lengthFt&&!out.lengthM){
+      const candidates=[...new Set([...upper([parts.fullText,parts.id,parts.weightBand].join('\n')).matchAll(/\b(\d{3,4})\s*M\b/g)]
+        .map(match=>match[1]).filter(value=>Math.abs(Number(value)-Number(out.lengthFt)*.3048)<=2))];
+      if(candidates.length===1){out.lengthM=candidates[0];out.review.push('lengthM');}
     }
     // Reject an extra leading digit when the second OCR pass and the net weight corroborate it.
     if(out.netLb&&out.grossLb&&Number(out.grossLb)>Number(out.netLb)*1.5){
@@ -156,6 +179,10 @@
       if(candidates.length===1){out.grossLb=candidates[0];out.review.push('grossLb');}
       else{out.grossLb='';out.review.push('grossLb');}
     }
+    if(out.netLb&&out.grossLb&&Number(out.grossLb)<Number(out.netLb)){
+      out.grossLb='';out.review.push('grossLb');
+    }
+    out.review=[...new Set(out.review)];
     return out;
   }
   return {parse};
