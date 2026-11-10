@@ -7,11 +7,11 @@
   const progress = $('progressArea'), bar = $('progressBar'), status = $('progressText');
   const fullCanvas = document.createElement('canvas'), smallCanvas = document.createElement('canvas');
   let image = null, url = null, worker = null, stream = null, cameraTimer = null, captureTimer = null, scanning = false;
-  let lastLiveImage=null, lastLiveFound=null;
+  let lastLiveImage=null, lastLiveFound=null, capturedLive=null;
   let report={startedAt:new Date().toISOString(),source:'none',events:[],images:{},stage:'ready'};
   function event(name,details={}) {report.events.push({at:new Date().toISOString(),name,...details});if(report.events.length>240)report.events.shift();}
   function showReportButton(){ $('saveLiveReport').hidden=false;$('reportHint').hidden=false; }
-  function resetReport(source){report={startedAt:new Date().toISOString(),source,events:[],images:{},stage:'ready'};showReportButton();event('new-test');}
+  function resetReport(source){capturedLive=null;report={startedAt:new Date().toISOString(),source,events:[],images:{},stage:'ready'};showReportButton();event('new-test');}
   function frameImage(frame,found,caption='Detection preview') {
     const c=toCanvas(frame),x=c.getContext('2d');
     if(found){const corners=found.corners;x.lineWidth=5;x.lineJoin='round';x.strokeStyle='#ffcc32';x.beginPath();x.moveTo(corners[0].x,corners[0].y);
@@ -127,8 +127,13 @@
     report.stage='detecting';event('scan-start',{imageWidth:image.naturalWidth,imageHeight:image.naturalHeight});
     try {
       if(typeof Tesseract==='undefined')throw new Error('OCR library did not load. Check the internet connection.');
-      const small=imageData(image,640),found=core.detectLabel(small);
-      report.detection={imageWidth:small.width,imageHeight:small.height,corners:found?.corners||null,coverage:found?.coverage||null,fill:found?.fill||null,ratio:found?.ratio||null};
+      const small=imageData(image,640),detected=core.detectLabel(small);
+      const adjusted=core.reconcileCaptureCorners(detected,capturedLive?.found,small.width,small.height,capturedLive?.width,capturedLive?.height);
+      const found=adjusted.found;
+      report.detection={imageWidth:small.width,imageHeight:small.height,corners:found?.corners||null,
+        originalCorners:detected?.corners||null,correctedCorners:adjusted.corrected,
+        coverage:found?.coverage||null,fill:found?.fill||null,ratio:found?.ratio||null};
+      if(adjusted.corrected.length)event('crop-corner-corrected',{indices:adjusted.corrected});
       report.images['scan-blue-mask.png']=maskImage(small);
       report.images['scan-boundary.jpg']=frameImage(small,found,'Boundary used for OCR');
       if(!found)throw new Error('The blue label could not be found. Move closer, keep the entire label visible, and try again.');
@@ -192,6 +197,7 @@
   function captureFrame(reason, showCheckFor=0){
     if(!stream||!video.videoWidth||scanning)return;
     const frame=lastLiveImage||imageData(video,640),found=lastLiveFound||core.detectLabel(frame);
+    capturedLive=found?{found,width:frame.width,height:frame.height}:null;
     event('camera-capture',{reason,corners:found?.corners||null});
     const capture=document.createElement('canvas');capture.width=video.videoWidth;capture.height=video.videoHeight;
     capture.getContext('2d').drawImage(video,0,0);
