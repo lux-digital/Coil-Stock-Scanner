@@ -9,20 +9,20 @@
   const upper = text => String(text || '').toUpperCase().replace(/[|]/g,'I').replace(/[“”]/g,'"');
   function numbers(text, min, max) {
     return [...upper(text).replace(/(?<=\d|\d[, .]\s*)[OQ](?=\d|\b)/g,'0').replace(/(?<=\d)[IL](?=\d|\b)/g,'1')
-      .matchAll(/\b\d{1,2}\s*[, .]\s*\d{3}\b|\b\d{3,5}\b/g)]
-      .map(match => match[0].replace(/\D/g,''))
+      .matchAll(/(?<!\d)\d{1,2}\s*[, .]\s*\d{3}\b|(?<!\d)\d{3,5}\b/g)]
+      .map(match => String(Number(match[0].replace(/\D/g,''))))
       .filter(value => Number(value)>=min && Number(value)<=max);
   }
   function readings(text, kind) {
-    const pounds=[],other=[],min=kind==='length'?100:500,max=kind==='length'?10000:30000;
+    const pounds=[],other=[],min=kind==='length'?1000:500,max=kind==='length'?10000:30000;
     const otherMin=kind==='length'?30:200,otherMax=kind==='length'?4000:15000;
     const lines=upper(text).split(/\n/).map(s=>s.trim()).filter(Boolean);
     for(const line of lines) {
-      const isOther=kind==='length'?/(?:\bM\b|\d\s*M\d?\b)/.test(line):/K[G6E]/.test(line);
+      const isOther=kind==='length'?/(?:\bM\b|\d\s*M\d?\b|\d\s*MM\b)/.test(line):/K[G6E]/.test(line);
       const main=numbers(line,min,max),secondary=numbers(line,otherMin,otherMax);
       if(isOther) {
         // A line can contain both columns when OCR joins them. Prefer the number nearest the unit.
-        const near=line.match(/(\d[\d, .]*\d)\s*(?:K[G6E]|M\d?\b)/);
+        const near=line.match(/(\d[\d, .]*\d)\s*(?:K[G6E]|MM?\b)/);
         const value=near && numbers(near[1],otherMin,otherMax)[0];
         if(value)other.push(value);else if(secondary.length)other.push(secondary.at(-1));
         if(main.length && Number(main[0])>otherMax)pounds.push(main[0]);
@@ -38,7 +38,7 @@
     // OCR sometimes inserts one digit into the small metric line (3,730 -> 37,730).
     // Only use a deletion when the printed imperial value independently confirms it.
     for(const text of [primary,alternative])for(const line of upper(text).split(/\n/)) {
-      if(!(kind==='length'?/M\d?\b/:/K[G6E]/).test(line))continue;
+      if(!(kind==='length'?/M\d?\b|MM\b/:/K[G6E]/).test(line))continue;
       for(const match of line.matchAll(/\b\d{5}\b/g)) {
         if(Number(match[0])<=max)continue;
         for(const lb of pounds) {
@@ -81,19 +81,30 @@
       if(marker && line.slice(marker.index+marker[0].length).trim()) {
         name=line.slice(marker.index+marker[0].length);break;
       }
-      if(/\b(?:PVDF\s+PRINT|STARLIGHT|HEMLOCK|ONYX|SUEDE|CHERRY|CEDAR|DRIFTWOOD|CYPRESS)\b/.test(line)) {
-        name=line.slice(line.search(/\b(?:PVDF|STARLIGHT|HEMLOCK|ONYX|SUEDE|CHERRY|CEDAR|DRIFTWOOD|CYPRESS)\b/));break;
+      if(/\b(?:PVDF\s+PRINT|STARLIGHT|HEMLOCK|BLACK\s+ONYX|WHITE\s+OAK|PECAN|ONYX|SUEDE|CHERRY|CEDAR|DRIFTWOOD|CYPRESS)\b/.test(line)) {
+        name=line.slice(line.search(/\b(?:PVDF|STARLIGHT|HEMLOCK|BLACK\s+ONYX|WHITE\s+OAK|PECAN|ONYX|SUEDE|CHERRY|CEDAR|DRIFTWOOD|CYPRESS)\b/));break;
       }
     }
     name=name.replace(/^[\s=:;|\\]+/,'').replace(/\s*(?:COATG|COATING|150\s*G\/M).*$/,'')
-      .replace(/[|\\;.,\s]+$/,'').replace(/\s+/g,' ').trim();
+      .replace(/[|\\;.,/\s]+$/,'').replace(/\s+/g,' ').trim();
     const codeLine=codeLines.find(line=>/\b(?:COL(?:OU)?R\s*TOP|COLOR\s*TOP)\b/.test(line))||'';
     const code=(codeLine.match(/\b[A-Z]{1,3}\d{2,4}[A-Z]?\b/)||[])[0]||
       (codeLines.flatMap(line=>line.match(/\b[A-Z]{1,3}\d{2,4}[A-Z]\b/g)||[]).find(x=>x!=='S9130')||'')||
       (upper(alternate?.colourCodeTight).match(/\b[A-Z]{1,3}\d{2,4}[A-Z]\b/)||[])[0]||'';
     const incomplete=name.includes('(') && !name.includes(')');
     if(incomplete&&code)return {value:code,review:true};
-    if(name.length>=4&&name.length<=48)return {value:name,review:incomplete};
+    // A second printed colour code can correct a damaged character inside parentheses.
+    const printedRaw=codeLines.flatMap(line=>line.match(/\b(?:PW|KT)[A-Z0-9]{3}\b/g)||[])
+      .find(x=>x!==name.match(/\(([^)]*)\)/)?.[1])||'';
+    const printedCode=printedRaw.slice(0,2)+printedRaw.slice(2).replace(/O/g,'0');
+    const inside=name.match(/\(([A-Z0-9@]{4,6})\)/);
+    let corrected=false;
+    if(inside&&printedCode&&inside[1]!==printedCode) {
+      const normalized=inside[1].replace(/[@O]/g,'0');
+      const differences=[...printedCode].filter((c,i)=>c!==normalized[i]).length;
+      if(printedCode.length===normalized.length && differences<=1){name=name.replace(inside[1],printedCode);corrected=true;}
+    }
+    if(name.length>=4&&name.length<=48)return {value:name,review:incomplete||corrected};
     return {value:code,review:!!code};
   }
   function parse(parts) {
@@ -106,9 +117,16 @@
       ['net','netAlt','weight','netLb','netKg'],
       ['gross','grossAlt','weight','grossLb','grossKg'],
       ['length','lengthAlt','length','lengthFt','lengthM']]) {
-      const result=pair(parts[source],parts[alt],kind);
+      const alternative=kind==='length'?[parts[alt],parts.lengthMetricTight].filter(Boolean).join('\n'):parts[alt];
+      const result=pair(parts[source],alternative,kind);
       out[a]=result[0];out[b]=result[1];
       if(result[2]&&out[b])out.review.push(b);
+    }
+    // Reject an extra leading digit when the second OCR pass and the net weight corroborate it.
+    if(out.netLb&&out.grossLb&&Number(out.grossLb)>Number(out.netLb)*1.5){
+      const candidates=readings(parts.grossAlt,'weight').pounds.filter(v=>Number(v)>=Number(out.netLb)&&Number(v)<Number(out.netLb)*1.25);
+      if(candidates.length===1){out.grossLb=candidates[0];out.review.push('grossLb');}
+      else{out.grossLb='';out.review.push('grossLb');}
     }
     return out;
   }
