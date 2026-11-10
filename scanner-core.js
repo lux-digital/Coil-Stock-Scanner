@@ -87,17 +87,6 @@
     if(found||now-state.lastSeen>850)return {last:null,lastSeen:0,steady:0};
     return state; // A brief missed detection should not restart the countdown.
   }
-  function alignCorners(corners, previous) {
-    if (!previous) return corners.map(p=>({...p}));
-    const choices=[0,1,2,3].map(shift=>corners.map((_,i)=>corners[(i+shift)%4]));
-    return choices.reduce((best,option)=>option.reduce((sum,p,i)=>sum+distance(p,previous[i])**2,0)<
-      best.reduce((sum,p,i)=>sum+distance(p,previous[i])**2,0)?option:best).map(p=>({...p}));
-  }
-  function smoothCorners(previous, target, blend) {
-    if(!previous)return target.map(p=>({...p}));
-    return target.map((p,i)=>({x:previous[i].x+(p.x-previous[i].x)*blend,
-      y:previous[i].y+(p.y-previous[i].y)*blend}));
-  }
   function solve(a,b) {
     const n=b.length,m=a.map((row,i)=>[...row,b[i]]);
     for(let i=0;i<n;i++) {
@@ -108,16 +97,6 @@
       for(let j=0;j<n;j++)if(j!==i){const f=m[j][i];for(let k=i;k<=n;k++)m[j][k]-=f*m[i][k];}
     }
     return m.map(row=>row[n]);
-  }
-  // Map grid coordinates onto the same perspective plane as the detected outline.
-  function quadProjection(corners) {
-    const rows=[],values=[];
-    [[0,0],[1,0],[1,1],[0,1]].forEach(([u,v],i)=>{const {x,y}=corners[i];
-      rows.push([u,v,1,0,0,0,-u*x,-v*x],[0,0,0,u,v,1,-u*y,-v*y]);values.push(x,y);
-    });
-    const m=solve(rows,values);
-    return (u,v)=>{const d=m[6]*u+m[7]*v+1;
-      return {x:(m[0]*u+m[1]*v+m[2])/d,y:(m[3]*u+m[4]*v+m[5])/d};};
   }
   function warp(image,corners,width=1600,height=880) {
     const a=[],b=[],unit=[[0,0],[1,0],[1,1],[0,1]];
@@ -167,5 +146,5 @@
   function orientationScore(text) {
     const t=text.toUpperCase();return (t.match(/COIL|COATED|STEEL|PART|CSM|CLR|ASTM|VANCOUVER|KOREA|LBS|UNION|NET|GROSS|WEIGHT/g)||[]).length;
   }
-  return {FIELD_IDS,blueMask,detectLabel,labelReady,sameLiveLabel,advanceLiveCapture,alignCorners,smoothCorners,quadProjection,warp,rotate,enhance,crop,orientationScore};
+  return {FIELD_IDS,blueMask,detectLabel,labelReady,sameLiveLabel,advanceLiveCapture,warp,rotate,enhance,crop,orientationScore};
 });
