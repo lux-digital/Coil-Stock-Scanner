@@ -87,6 +87,23 @@
     if(found||now-state.lastSeen>850)return {last:null,lastSeen:0,steady:0};
     return state; // A brief missed detection should not restart the countdown.
   }
+  function reconcileCaptureCorners(found,live,width,height,liveWidth,liveHeight) {
+    if(!live||!liveWidth||!liveHeight||!labelReady(live,liveWidth,liveHeight))return {found,corrected:[]};
+    const prior=live.corners.map(p=>({x:p.x*width/liveWidth,y:p.y*height/liveHeight}));
+    if(!found)return {found:{...live,corners:prior},corrected:[0,1,2,3]};
+    // Match cyclic corner order before comparing independent detections.
+    const options=[0,1,2,3].map(shift=>prior.map((_,i)=>prior[(i+shift)%4]));
+    const aligned=options.reduce((best,points)=>
+      points.reduce((sum,p,i)=>sum+distance(p,found.corners[i]),0)<
+      best.reduce((sum,p,i)=>sum+distance(p,found.corners[i]),0)?points:best);
+    const offsets=found.corners.map((p,i)=>distance(p,aligned[i]));
+    const threshold=Math.max(40,Math.min(width,height)*.10);
+    const corrected=offsets.flatMap((delta,i)=>delta>threshold?[i]:[]);
+    // A single wildly displaced corner is a colour reflection, not camera movement.
+    if(corrected.length!==1||offsets.filter(d=>d<threshold*.65).length<3)return {found,corrected:[]};
+    const corners=found.corners.map((p,i)=>i===corrected[0]?aligned[i]:p);
+    return {found:{...found,corners},corrected};
+  }
   function solve(a,b) {
     const n=b.length,m=a.map((row,i)=>[...row,b[i]]);
     for(let i=0;i<n;i++) {
@@ -146,5 +163,5 @@
   function orientationScore(text) {
     const t=text.toUpperCase();return (t.match(/COIL|COATED|STEEL|PART|CSM|CLR|ASTM|VANCOUVER|KOREA|LBS|UNION|NET|GROSS|WEIGHT/g)||[]).length;
   }
-  return {FIELD_IDS,blueMask,detectLabel,labelReady,sameLiveLabel,advanceLiveCapture,warp,rotate,enhance,crop,orientationScore};
+  return {FIELD_IDS,blueMask,detectLabel,labelReady,sameLiveLabel,advanceLiveCapture,reconcileCaptureCorners,warp,rotate,enhance,crop,orientationScore};
 });
