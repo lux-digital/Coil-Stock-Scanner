@@ -71,3 +71,31 @@ assert(pecan.review.includes('grossLb'));
 const onyx=parse({right:'BLACK ONYX(K1@31)\nKTO31',length:'[a0 # 100',lengthAlt:'{ 740 # TOP'});
 assert.equal(onyx.colour,'BLACK ONYX(KT031)');
 assert.equal(onyx.lengthFt,'');
+
+// Nine new phone reports exposed incomplete names, multiple part numbers and OCR noise.
+const chestnut=parse({left:'L2098V',right:'CSM_CLR KNOTTY CHESTNUT(P\nCOLOR TOP PW234',
+  idTight:'1J2EA90B',net:'10,340 LBS\n[4,690 Kg]',gross:'19,783'});
+assert.equal(chestnut.colour,'KNOTTY CHESTNUT (PW234)');
+assert.equal(chestnut.coilId,'J2EA90B');
+assert.equal(chestnut.grossLb,'');
+
+const starlight=parse({left:'L2386V',right:'STARLIGHT (PC11E)',
+  net:'Y.944 IN\n8,819 LBS\nr 2°600 Ke',gross:'9, P61 LBS\nr 42110 Ke',
+  fullText:'[ 4,000 Kg ] [ 4,110 Kg ]'});
+assert.deepEqual([starlight.netLb,starlight.netKg,starlight.grossLb,starlight.grossKg],
+  ['8819','4000','9061','4110']);
+
+const multi=parse({left:'L20406K, L2052V, L2053V',right:'PART NO L2040K\nCHAMPAGNE WAVE (PS',
+  colourCodeTight:'PS135',id:'JIEA91G',net:'9,524 LBS\n[4,328 Kg]',netMetricTight:'[4,320 Kg]',
+  gross:'9,767 LBS\n[4,430 Kg]'});
+assert.equal(multi.partNo,'L2040K');
+assert.equal(multi.coilId,'J1EA91G');
+assert.equal(multi.colour,'CHAMPAGNE WAVE (PS135)');
+assert.equal(multi.netKg,'4320');
+
+const wrongMetric=parse({length:'2363 FT\n[726 M]'});
+assert.equal(wrongMetric.lengthFt,'2363');
+assert.equal(wrongMetric.lengthM,'');
+assert.equal(parse({right:'PART NO L2098V\nKNOTTY CHESTNUT(P'}).colour,'KNOTTY CHESTNUT');
+assert.equal(parse({idTight:'JSAA91M',idWide:'J8AA91M'}).coilId,'J8AA91M');
+assert.equal(parse({length:'2330 FT',lengthAlt:'e710 METSTS'}).lengthM,'710');
