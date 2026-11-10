@@ -26,3 +26,18 @@ state=core.advanceLiveCapture(state,null,false,2300);
 assert.equal(state.steady,0);
 state=core.advanceLiveCapture(state,frames[2],true,2500);
 assert.equal(state.steady,1); // A new label still needs a second reading.
+
+// The manually captured label has a dark border inside a blue-tinted camera frame.
+// The colour mask alone picked the image corners; the border is inside the frame.
+const width=270,height=480,data=new Uint8ClampedArray(width*height*4);
+for(let y=0;y<height;y++)for(let x=0;x<width;x++){
+  const i=(y*width+x)*4,isBorder=(y===6&&x>=27&&x<=233)||
+    ((x===27||x===233)&&y>=6&&y<=423);
+  data[i]=isBorder?40:85;data[i+1]=isBorder?55:180;data[i+2]=isBorder?60:200;data[i+3]=255;
+}
+const edgeCandidate=candidate([[269,0],[232,423],[19,409],[0,0]]);
+edgeCandidate.coverage=.76;
+const refined=core.refineBorderCorners({width,height,data},edgeCandidate);
+assert(refined.borderRefined);
+assert(core.labelReady(refined,width,height));
+assert.deepEqual(refined.corners.map(p=>[p.x,p.y]),[[233,6],[232,423],[19,409],[27,6]]);
