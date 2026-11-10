@@ -33,11 +33,18 @@
       const boundary=[];
       while(head<tail) {
         const p=queue[head++],x=p%w,y=Math.floor(p/w);let edge=false;
-        for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1]]) {
-          const xx=x+dx,yy=y+dy,q=yy*w+xx;
-          if(xx<0||xx>=w||yy<0||yy>=h||!mask[q]) {edge=true;continue;}
-          if(!seen[q]) {seen[q]=1;queue[tail++]=q;}
-        }
+        let q=p-1;
+        if(x===0||!mask[q])edge=true;
+        else if(!seen[q]){seen[q]=1;queue[tail++]=q;}
+        q=p+1;
+        if(x===w-1||!mask[q])edge=true;
+        else if(!seen[q]){seen[q]=1;queue[tail++]=q;}
+        q=p-w;
+        if(y===0||!mask[q])edge=true;
+        else if(!seen[q]){seen[q]=1;queue[tail++]=q;}
+        q=p+w;
+        if(y===h-1||!mask[q])edge=true;
+        else if(!seen[q]){seen[q]=1;queue[tail++]=q;}
         if(edge)boundary.push({x,y});
       }
       if(tail<n*.018||boundary.length<4)continue;
@@ -63,6 +70,16 @@
     if (!found || found.coverage < .10 || found.fill < .68 || found.fill > 1.08) return false;
     const margin = Math.max(4, Math.round(Math.min(width, height) * .012));
     return found.corners.every(p => p.x >= margin && p.y >= margin && p.x < width-margin && p.y < height-margin);
+  }
+  function sameLiveLabel(a,b) {
+    if(!a||!b)return false;
+    const bounds=found=>({left:Math.min(...found.corners.map(p=>p.x)),right:Math.max(...found.corners.map(p=>p.x)),
+      top:Math.min(...found.corners.map(p=>p.y)),bottom:Math.max(...found.corners.map(p=>p.y))});
+    const x=bounds(a),y=bounds(b);
+    const areaX=(x.right-x.left)*(x.bottom-x.top),areaY=(y.right-y.left)*(y.bottom-y.top);
+    const intersection=Math.max(0,Math.min(x.right,y.right)-Math.max(x.left,y.left))*
+      Math.max(0,Math.min(x.bottom,y.bottom)-Math.max(x.top,y.top));
+    return areaX>0&&areaY>0&&intersection/(areaX+areaY-intersection)>.60;
   }
   function solve(a,b) {
     const n=b.length,m=a.map((row,i)=>[...row,b[i]]);
@@ -123,5 +140,5 @@
   function orientationScore(text) {
     const t=text.toUpperCase();return (t.match(/COIL|COATED|STEEL|PART|CSM|CLR|ASTM|VANCOUVER|KOREA|LBS|UNION|NET|GROSS|WEIGHT/g)||[]).length;
   }
-  return {FIELD_IDS,blueMask,detectLabel,labelReady,warp,rotate,enhance,crop,orientationScore};
+  return {FIELD_IDS,blueMask,detectLabel,labelReady,sameLiveLabel,warp,rotate,enhance,crop,orientationScore};
 });
