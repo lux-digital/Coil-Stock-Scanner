@@ -99,6 +99,82 @@
     const corners=found.corners.map(p=>top.includes(p)?{x:p.x<w/2?left.x:right.x,y:topY}:p);
     return {...found,corners,coverage:polygonArea(corners)/(w*h),borderRefined:true};
   }
+  function refineShadowBoundary(image,found) {
+    if(!found)return found;
+    const {width:w,height:h,data}=image;
+    const ordered=found.corners.map((p,i)=>({...p,i})).sort((a,b)=>a.y-b.y);
+    const [tl,tr]=ordered.slice(0,2).sort((a,b)=>a.x-b.x);
+    const [bl,br]=ordered.slice(2).sort((a,b)=>a.x-b.x);
+    const topY=Math.min(tl.y,tr.y),bottomY=Math.max(bl.y,br.y);
+    if(bottomY-topY<(br.x-bl.x)*1.2)return found;
+    // The colour difference survives broad shadows and coloured reflections.
+    const colour=(x,y)=>{const i=(y*w+x)*4;return data[i+1]+data[i+2]-2*data[i];};
+    const fit=(samples)=>{
+      if(samples.length<9)return null;
+      const regression=points=>{
+        const n=points.length,sx=points.reduce((s,p)=>s+p[0],0),sy=points.reduce((s,p)=>s+p[1],0);
+        const xx=points.reduce((s,p)=>s+p[0]*p[0],0)-sx*sx/n;
+        if(xx<1)return null;
+        const slope=(points.reduce((s,p)=>s+p[0]*p[1],0)-sx*sy/n)/xx;
+        return {slope,offset:sy/n-slope*sx/n};
+      };
+      const first=regression(samples);if(!first)return null;
+      const errors=samples.map(p=>p[1]-first.slope*p[0]-first.offset).sort((a,b)=>a-b);
+      const median=errors[Math.floor(errors.length/2)];
+      const kept=samples.filter(p=>Math.abs(p[1]-first.slope*p[0]-first.offset-median)<10);
+      if(kept.length<samples.length*.7)return null;
+      const line=regression(kept);if(!line)return null;
+      const rms=Math.sqrt(kept.reduce((s,p)=>s+(p[1]-line.slope*p[0]-line.offset)**2,0)/kept.length);
+      return rms<3.6?line:null;
+    };
+    const vertical=(a,b,right)=>{
+      const hits=[];
+      for(let y=Math.ceil(Math.max(tl.y,tr.y)+20);y<Math.min(bl.y,br.y)-20;y+=8){
+        const predicted=a.x+(b.x-a.x)*(y-a.y)/Math.max(1,b.y-a.y);
+        let best=-Infinity,at=-1;
+        for(let x=Math.max(8,Math.round(predicted)-50);x<Math.min(w-8,Math.round(predicted)+51);x++){
+          const contrast=right?colour(x-6,y)-colour(x+6,y):colour(x+6,y)-colour(x-6,y);
+          const score=contrast-Math.abs(x-predicted)*.5;
+          if(contrast>30&&score>best){best=score;at=x;}
+        }
+        if(at>=0)hits.push([y,at]);
+      }
+      return fit(hits);
+    };
+    const horizontal=(a,b,top)=>{
+      const hits=[];
+      for(let x=Math.ceil(a.x+15);x<b.x-15;x+=8){
+        let predicted=a.y+(b.y-a.y)*(x-a.x)/(b.x-a.x);
+        if(top&&Math.abs(a.y-b.y)>50)predicted=a.y;
+        let best=-Infinity,at=-1;
+        for(let y=Math.max(8,Math.round(predicted)-35);y<Math.min(h-8,Math.round(predicted)+36);y++){
+          const contrast=top?colour(x,y+6)-colour(x,y-6):colour(x,y-6)-colour(x,y+6);
+          const score=contrast-Math.abs(y-predicted)*.8;
+          if(contrast>30&&score>best){best=score;at=y;}
+        }
+        if(at>=0)hits.push([x,at]);
+      }
+      return fit(hits);
+    };
+    const left=vertical(tl,bl,false),right=vertical(tr,br,true);
+    const top=horizontal(tl,tr,true),bottom=horizontal(bl,br,false);
+    if(!left||!right||!top||!bottom)return found;
+    const crossing=(vertical,horizontal)=>{
+      const x=(vertical.slope*horizontal.offset+vertical.offset)/(1-vertical.slope*horizontal.slope);
+      return {x,y:horizontal.slope*x+horizontal.offset};
+    };
+    const replacements=[[tl,crossing(left,top)],[tr,crossing(right,top)],
+      [br,crossing(right,bottom)],[bl,crossing(left,bottom)]];
+    if(replacements.some(([old,p])=>!Number.isFinite(p.x)||!Number.isFinite(p.y)||
+      p.x<4||p.x>w-5||p.y<4||p.y>h-5||distance(old,p)>Math.max(w,h)*.32))return found;
+    if(!replacements.some(([old,p])=>distance(old,p)>18))return found;
+    const corners=found.corners.map((p,i)=>{
+      const q=replacements.find(([old])=>old.i===i)[1];return {x:Math.round(q.x),y:Math.round(q.y)};
+    });
+    const area=polygonArea(corners),coverage=area/(w*h);
+    if(coverage<.10||coverage>found.coverage*1.45||coverage<found.coverage*.65)return found;
+    return {...found,corners,coverage,shadowBorderRefined:true};
+  }
   function sameLiveLabel(a,b) {
     if(!a||!b)return false;
     const bounds=found=>({left:Math.min(...found.corners.map(p=>p.x)),right:Math.max(...found.corners.map(p=>p.x)),
@@ -191,5 +267,5 @@
   function orientationScore(text) {
     const t=text.toUpperCase();return (t.match(/COIL|COATED|STEEL|PART|CSM|CLR|ASTM|VANCOUVER|KOREA|LBS|UNION|NET|GROSS|WEIGHT/g)||[]).length;
   }
-  return {FIELD_IDS,blueMask,detectLabel,labelReady,refineBorderCorners,sameLiveLabel,advanceLiveCapture,reconcileCaptureCorners,warp,rotate,enhance,crop,orientationScore};
+  return {FIELD_IDS,blueMask,detectLabel,labelReady,refineBorderCorners,refineShadowBoundary,sameLiveLabel,advanceLiveCapture,reconcileCaptureCorners,warp,rotate,enhance,crop,orientationScore};
 });

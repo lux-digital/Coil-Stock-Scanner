@@ -2,6 +2,7 @@
 (function () {
   'use strict';
   const core = CoilCore;
+  const findLabel=frame=>core.refineShadowBoundary(frame,core.refineBorderCorners(frame,core.detectLabel(frame)));
   const $ = id => document.getElementById(id);
   const input = $('imageInput'), preview = $('preview'), scan = $('scanButton'), results = $('resultsCard');
   const progress = $('progressArea'), bar = $('progressBar'), status = $('progressText');
@@ -26,7 +27,7 @@
   }
   async function downloadReport(){
     try{
-      if(stream&&video.videoWidth){const frame=imageData(video,640);lastLiveImage=frame;lastLiveFound=core.refineBorderCorners(frame,core.detectLabel(frame));}
+      if(stream&&video.videoWidth){const frame=imageData(video,640);lastLiveImage=frame;lastLiveFound=findLabel(frame);}
       if(lastLiveImage){report.images['camera-boundary.jpg']=frameImage(lastLiveImage,lastLiveFound,report.stage);
         report.images['blue-pixel-mask.png']=maskImage(lastLiveImage);}
       if(image&&!report.images['original-frame.jpg'])report.images['original-frame.jpg']=toCanvas(imageData(image,2400)).toDataURL('image/jpeg',.86);
@@ -115,9 +116,9 @@
     await ocr.setParameters({tessedit_pageseg_mode:'6',user_defined_dpi:'300'});
     return (await ocr.recognize(canvas,{rectangle:{left:Math.round(rect[0]*canvas.width),top:Math.round(rect[1]*canvas.height),width:Math.round(rect[2]*canvas.width),height:Math.round(rect[3]*canvas.height)}})).data.text;
   }
-  async function recognizeEnlarged(ocr,canvas,rect) {
+  async function recognizeEnlarged(ocr,canvas,rect,scale=3) {
     const crop=document.createElement('canvas');
-    crop.width=Math.round(canvas.width*rect[2]*3);crop.height=Math.round(canvas.height*rect[3]*3);
+    crop.width=Math.round(canvas.width*rect[2]*scale);crop.height=Math.round(canvas.height*rect[3]*scale);
     crop.getContext('2d').drawImage(canvas,rect[0]*canvas.width,rect[1]*canvas.height,
       rect[2]*canvas.width,rect[3]*canvas.height,0,0,crop.width,crop.height);
     return (await ocr.recognize(crop)).data.text;
@@ -127,11 +128,13 @@
     report.stage='detecting';event('scan-start',{imageWidth:image.naturalWidth,imageHeight:image.naturalHeight});
     try {
       if(typeof Tesseract==='undefined')throw new Error('OCR library did not load. Check the internet connection.');
-      const small=imageData(image,640),rawDetection=core.detectLabel(small),detected=core.refineBorderCorners(small,rawDetection);
-      const adjusted=core.reconcileCaptureCorners(detected,capturedLive?.found,small.width,small.height,capturedLive?.width,capturedLive?.height);
+      const small=imageData(image,640),rawDetection=core.detectLabel(small),detected=core.refineShadowBoundary(small,core.refineBorderCorners(small,rawDetection));
+      const adjusted=detected?.shadowBorderRefined?{found:detected,corrected:[]}:
+        core.reconcileCaptureCorners(detected,capturedLive?.found,small.width,small.height,capturedLive?.width,capturedLive?.height);
       const found=adjusted.found;
       report.detection={imageWidth:small.width,imageHeight:small.height,corners:found?.corners||null,
-        originalCorners:rawDetection?.corners||null,borderRefined:!!detected?.borderRefined,correctedCorners:adjusted.corrected,
+        originalCorners:rawDetection?.corners||null,borderRefined:!!detected?.borderRefined,
+        shadowBorderRefined:!!detected?.shadowBorderRefined,correctedCorners:adjusted.corrected,
         coverage:found?.coverage||null,fill:found?.fill||null,ratio:found?.ratio||null};
       if(adjusted.corrected.length)event('crop-corner-corrected',{indices:adjusted.corrected});
       report.images['scan-blue-mask.png']=maskImage(small);
@@ -185,6 +188,39 @@
       parts.colourCodeTight=await recognizeEnlarged(ocr,straight,[.675,.595,.095,.07]);
       await ocr.setParameters({tessedit_char_whitelist:''});
       let values=CoilParser.parse(parts);
+      const missingNumbers=()=>['netLb','netKg','grossLb','grossKg','lengthFt','lengthM']
+        .some(key=>!values[key])||(values.netLb&&values.grossLb&&Number(values.grossLb)<Number(values.netLb));
+      if(missingNumbers()){
+        await ocr.setParameters({tessedit_pageseg_mode:'6',tessedit_char_whitelist:''});
+        regions.weightBand=[.015,.52,.68,.23];
+        parts.weightBand=await recognizeRegion(ocr,straight,regions.weightBand);
+        values=CoilParser.parse(parts);
+      }
+      // A second layout puts the metric row lower. Read a wider strip on the
+      // original colour image when a number was missed or conflicts with its pair.
+      if(missingNumbers()){
+        await ocr.setParameters({tessedit_pageseg_mode:'6',tessedit_char_whitelist:''});
+        const wide={netWide:[.035,.58,.21,.18],grossWide:[.225,.58,.22,.18],lengthWide:[.42,.58,.21,.18]};
+        for(const [key,rect] of Object.entries(wide)){
+          const prefix=key.replace('Wide','');
+          if(values[prefix+'Lb']&&values[prefix+'Kg']||prefix==='length'&&values.lengthFt&&values.lengthM)continue;
+          regions[key]=rect;parts[key]=await recognizeRegion(ocr,straight,rect);
+        }
+        values=CoilParser.parse(parts);
+      }
+      for(const [field,region] of [['netLb',[.045,.525,.18,.065]],
+        ['grossLb',[.245,.525,.20,.065]],['lengthFt',[.42,.52,.18,.065]]])if(!values[field]){
+        await ocr.setParameters({tessedit_pageseg_mode:'7',tessedit_char_whitelist:''});
+        const key=field==='lengthFt'?'lengthUpper':field==='netLb'?'netUpper':'grossUpper';
+        regions[key]=region;parts[key]=await recognizeEnlarged(ocr,straight,region,2);
+        values=CoilParser.parse(parts);
+      }
+      if(!values.coilId){
+        await ocr.setParameters({tessedit_pageseg_mode:'6',tessedit_char_whitelist:''});
+        regions.idRaw=[.33,.62,.33,.16];
+        parts.idRaw=await recognizeEnlarged(ocr,straight,regions.idRaw,2);
+        values=CoilParser.parse(parts);
+      }
       // Spend an extra OCR pass only when a key field was not read from the main crops.
       if(!values.coilId){
         await ocr.setParameters({tessedit_pageseg_mode:'7',tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'});
@@ -195,6 +231,12 @@
       for(const [field,region] of [['netKg',[.055,.612,.13,.055]],['grossKg',[.28,.612,.13,.055]]])if(!values[field]){
         await ocr.setParameters({tessedit_pageseg_mode:'7',tessedit_char_whitelist:''});
         const key=field==='netKg'?'netMetricTight':'grossMetricTight';
+        regions[key]=region;parts[key]=await recognizeEnlarged(ocr,straight,region);
+        values=CoilParser.parse(parts);
+      }
+      for(const [field,region] of [['netKg',[.05,.655,.15,.07]],['grossKg',[.28,.675,.15,.055]]])if(!values[field]){
+        await ocr.setParameters({tessedit_pageseg_mode:'7',tessedit_char_whitelist:''});
+        const key=field==='netKg'?'netMetricLower':'grossMetricLower';
         regions[key]=region;parts[key]=await recognizeEnlarged(ocr,straight,region);
         values=CoilParser.parse(parts);
       }
@@ -209,7 +251,7 @@
   const video=$('cameraVideo'),overlay=$('cameraOverlay'),cameraStatus=$('cameraStatus');
   function captureFrame(reason, showCheckFor=0){
     if(!stream||!video.videoWidth||scanning)return;
-    const frame=lastLiveImage||imageData(video,640),found=lastLiveFound||core.refineBorderCorners(frame,core.detectLabel(frame));
+    const frame=lastLiveImage||imageData(video,640),found=lastLiveFound||findLabel(frame);
     capturedLive=found?{found,width:frame.width,height:frame.height}:null;
     event('camera-capture',{reason,corners:found?.corners||null});
     const capture=document.createElement('canvas');capture.width=video.videoWidth;capture.height=video.videoHeight;
@@ -271,7 +313,7 @@
         try{
           const started=performance.now(),intervalMs=lastFrameAt?started-lastFrameAt:null;lastFrameAt=started;
           // Live detection only needs a small frame; the captured photo keeps camera resolution.
-          const img=imageData(video,480),found=core.refineBorderCorners(img,core.detectLabel(img));
+          const img=imageData(video,480),found=findLabel(img);
           lastLiveImage=img;lastLiveFound=found;
           const c=overlay;
           let acceptable=false;
@@ -289,7 +331,8 @@
           const reason=!found?'no-blue-label-candidate':found.coverage<.10?'too-small':found.fill<.68||found.fill>1.08?'unreliable-shape':
             found.corners.some(q=>q.x<margin||q.y<margin||q.x>=img.width-margin||q.y>=img.height-margin)?'touches-camera-edge':'candidate-visible';
           event('camera-frame',{reason,acceptable,steady:stability.steady,intervalMs,detectionMs:Math.round(performance.now()-started),frameWidth:img.width,frameHeight:img.height,
-            coverage:found?.coverage||null,fill:found?.fill||null,ratio:found?.ratio||null,borderRefined:!!found?.borderRefined,corners:found?.corners||null,
+            coverage:found?.coverage||null,fill:found?.fill||null,ratio:found?.ratio||null,borderRefined:!!found?.borderRefined,
+            shadowBorderRefined:!!found?.shadowBorderRefined,corners:found?.corners||null,
             overlayWidth:c.width,overlayHeight:c.height});
           cameraStatus.textContent=stability.steady>=2&&acceptable?'✓ Label recognized. Scanning...':acceptable?'Label found. Keep it in view...':reason==='touches-camera-edge'?'Move back until the whole label fits.':'Point the camera at the full blue label.';
           if(stability.steady>=2&&acceptable){
