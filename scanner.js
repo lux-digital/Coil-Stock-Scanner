@@ -196,6 +196,7 @@
     const capture=document.createElement('canvas');capture.width=video.videoWidth;capture.height=video.videoHeight;
     capture.getContext('2d').drawImage(video,0,0);
     const dataURL=capture.toDataURL('image/jpeg',.9);report.images['original-frame.jpg']=dataURL;
+    if(showCheckFor)video.pause(); // Keep the green outline on the frame that was captured.
     const finish=()=>{captureTimer=null;stopCamera();image=new Image();image.onload=()=>{preview.src=dataURL;$('previewWrapper').style.display='block';runScan();};image.src=dataURL;};
     if(showCheckFor)captureTimer=setTimeout(finish,showCheckFor);else finish();
   }
@@ -222,9 +223,12 @@
       cameraTimer=setInterval(()=>{
         if(busy||scanning||!video.videoWidth)return;busy=true;
         try{
-          const img=imageData(video,640),found=core.detectLabel(img);
+          // Live detection only needs a small frame; the captured photo keeps camera resolution.
+          const img=imageData(video,480),found=core.detectLabel(img);
           lastLiveImage=img;lastLiveFound=found;
-          const c=overlay,context=c.getContext('2d');c.width=c.clientWidth;c.height=c.clientHeight;context.clearRect(0,0,c.width,c.height);
+          const c=overlay,width=c.clientWidth,height=c.clientHeight;
+          if(c.width!==width||c.height!==height){c.width=width;c.height=height;}
+          const context=c.getContext('2d');context.clearRect(0,0,c.width,c.height);
           let acceptable=false;
           if(found){
             const p=found.corners;
@@ -233,8 +237,9 @@
             context.lineWidth=5;context.lineJoin='round';context.beginPath();
             context.moveTo(dx+p[0].x*scale,dy+p[0].y*scale);
             for(const q of p.slice(1))context.lineTo(dx+q.x*scale,dy+q.y*scale);context.closePath();
-            if(acceptable&&last&&p.every((q,i)=>Math.hypot(q.x-last[i].x,q.y-last[i].y)<12))steady++;else steady=0;
-            last=acceptable?p.map(q=>({...q})):null;
+            // Compare the label's overall position, so ordinary hand movement does not restart capture.
+            steady=acceptable?(last&&core.sameLiveLabel(found,last)?steady+1:1):0;
+            last=acceptable?found:null;
             const recognized=acceptable&&steady>=3;
             if(recognized){context.fillStyle='rgba(16, 185, 92, .30)';context.fill();}
             context.strokeStyle=recognized?'#00d967':'#ffcf50';context.lineWidth=5;context.stroke();
@@ -253,14 +258,14 @@
             coverage:found?.coverage||null,fill:found?.fill||null,ratio:found?.ratio||null,corners:found?.corners||null,
             overlayWidth:c.width,overlayHeight:c.height});
           if(found&&!report.images['first-boundary.jpg'])report.images['first-boundary.jpg']=frameImage(img,found,'First detected outline');
-          cameraStatus.textContent=steady>=3?'✓ Label recognized. Scanning...':acceptable?'Label found. Hold still...':reason==='touches-camera-edge'?'Move back until the whole label fits.':'Point the camera at the full blue label.';
+          cameraStatus.textContent=steady>=3?'✓ Label recognized. Scanning...':acceptable?'Label found. Keep it in view...':reason==='touches-camera-edge'?'Move back until the whole label fits.':'Point the camera at the full blue label.';
           if(steady>=3){
             clearInterval(cameraTimer);cameraTimer=null;
-            captureFrame('automatic',750);
+            captureFrame('automatic',500);
           }
         }catch(error){console.error(error);report.error={message:error.message,stack:error.stack};report.stage='camera-error';event('camera-error',{message:error.message});stopCamera();cameraStatus.textContent='Camera preview stopped. Use the photo picker below.';}
         finally{busy=false;}
-      },350);
+      },180);
     }catch(error){report.error={message:error.message,stack:error.stack};report.stage='camera-error';event('camera-error',{message:error.message});stopCamera();$('startCamera').textContent='RETRY LIVE SCANNER';
       alert('Camera could not start. Allow camera access in Safari, or use the photo picker below.');console.error(error);}
   });
