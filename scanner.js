@@ -193,14 +193,15 @@
   function captureFrame(reason, showCheckFor=0){
     if(!stream||!video.videoWidth||scanning)return;
     const frame=lastLiveImage||imageData(video,640),found=lastLiveFound||core.detectLabel(frame);
-    report.images['camera-boundary.jpg']=frameImage(frame,found,'Captured '+reason);
-    report.images['blue-pixel-mask.png']=maskImage(frame);
     event('camera-capture',{reason,corners:found?.corners||null});
     const capture=document.createElement('canvas');capture.width=video.videoWidth;capture.height=video.videoHeight;
     capture.getContext('2d').drawImage(video,0,0);
     const dataURL=capture.toDataURL('image/jpeg',.9);report.images['original-frame.jpg']=dataURL;
     if(showCheckFor)video.pause(); // Keep the green outline on the frame that was captured.
-    const finish=()=>{captureTimer=null;stopCamera();image=new Image();image.onload=()=>{preview.src=dataURL;$('previewWrapper').style.display='block';runScan();};image.src=dataURL;};
+    const finish=()=>{captureTimer=null;
+      report.images['camera-boundary.jpg']=frameImage(frame,found,'Captured '+reason);
+      report.images['blue-pixel-mask.png']=maskImage(frame);
+      stopCamera();image=new Image();image.onload=()=>{preview.src=dataURL;$('previewWrapper').style.display='block';runScan();};image.src=dataURL;};
     if(showCheckFor)captureTimer=setTimeout(finish,showCheckFor);else finish();
   }
   $('captureNow').addEventListener('click',()=>captureFrame('manual'));
@@ -215,10 +216,11 @@
   $('stopCamera').addEventListener('click',()=>{event('camera-stopped');stopCamera();});
   function drawLiveOverlay(now){
     overlayFrame=requestAnimationFrame(drawLiveOverlay);
-    if(now-liveOutline.lastDraw<30)return;
+    if(now-liveOutline.lastDraw<42)return;
     const elapsed=liveOutline.lastDraw?Math.min(65,now-liveOutline.lastDraw):33;
     liveOutline.lastDraw=now;
-    const c=overlay,w=c.clientWidth,h=c.clientHeight,dpr=Math.min(2,window.devicePixelRatio||1);
+    // A one-pixel canvas keeps the camera analysis responsive on older iPhones.
+    const c=overlay,w=c.clientWidth,h=c.clientHeight,dpr=1;
     if(!w||!h)return;
     if(c.width!==Math.round(w*dpr)||c.height!==Math.round(h*dpr)){
       c.width=Math.round(w*dpr);c.height=Math.round(h*dpr);
@@ -226,7 +228,7 @@
     const ctx=c.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
     const state=liveOutline;
     if(!state.target||(!state.recognized&&now-state.seenAt>620)){state.current=null;return;}
-    const blend=1-Math.exp(-elapsed/75);
+    const blend=1-Math.exp(-elapsed/170);
     state.current=core.smoothCorners(state.current,state.target,blend);
     const p=state.current,project=core.quadProjection(p);
     const trace=points=>{ctx.beginPath();ctx.moveTo(points[0].x,points[0].y);
@@ -244,10 +246,10 @@
     trace([project(0,top),project(1,top),project(1,bottom),project(0,bottom)]);
     ctx.fillStyle=state.recognized?'rgba(150,255,180,.19)':'rgba(120,243,255,.20)';ctx.fill();
     const left=project(0,sweep),right=project(1,sweep);
-    ctx.strokeStyle=state.recognized?'#9effbb':'#83f4ff';ctx.lineWidth=2.5;ctx.shadowBlur=12;ctx.shadowColor=ctx.strokeStyle;
+    ctx.strokeStyle=state.recognized?'#9effbb':'#83f4ff';ctx.lineWidth=2.5;
     ctx.beginPath();ctx.moveTo(left.x,left.y);ctx.lineTo(right.x,right.y);ctx.stroke();ctx.restore();
     trace(p);ctx.strokeStyle=state.recognized?'#00e477':'#ffd45c';ctx.lineWidth=4;ctx.lineJoin='round';
-    ctx.shadowBlur=state.recognized?14:7;ctx.shadowColor=ctx.strokeStyle;ctx.stroke();ctx.shadowBlur=0;
+    ctx.stroke();
     if(state.recognized){
       const center=project(.5,.5),r=Math.max(23,Math.min(36,Math.min(w,h)*.075));
       ctx.fillStyle='#00a94f';ctx.beginPath();ctx.arc(center.x,center.y,r,0,Math.PI*2);ctx.fill();
@@ -267,12 +269,14 @@
       report.camera={width:video.videoWidth,height:video.videoHeight,frameRate:settings.frameRate||null,facingMode:settings.facingMode||null};
       report.stage='camera-running';event('camera-started',report.camera);
       $('cameraPanel').hidden=false;$('startCamera').hidden=true;
+      lastLiveImage=null;lastLiveFound=null;
       liveOutline={target:null,current:null,seenAt:0,recognized:false,lastDraw:0};
       overlayFrame=requestAnimationFrame(drawLiveOverlay);
-      let last=null,steady=0,busy=false;
+      let stability={last:null,lastSeen:0,steady:0},busy=false,lastFrameAt=0;
       cameraTimer=setInterval(()=>{
         if(busy||scanning||!video.videoWidth)return;busy=true;
         try{
+          const started=performance.now(),intervalMs=lastFrameAt?started-lastFrameAt:null;lastFrameAt=started;
           // Live detection only needs a small frame; the captured photo keeps camera resolution.
           const img=imageData(video,480),found=core.detectLabel(img);
           lastLiveImage=img;lastLiveFound=found;
@@ -283,22 +287,20 @@
             acceptable=core.labelReady(found,img.width,img.height);
             const scale=Math.min(width/img.width,height/img.height),dx=(width-img.width*scale)/2,dy=(height-img.height*scale)/2;
             // Compare the label's overall position, so ordinary hand movement does not restart capture.
-            steady=acceptable?(last&&core.sameLiveLabel(found,last)?steady+1:1):0;
-            last=acceptable?found:null;
-            const recognized=acceptable&&steady>=3;
+            stability=core.advanceLiveCapture(stability,found,acceptable,started);
+            const recognized=acceptable&&stability.steady>=2;
             const target=p.map(q=>({x:dx+q.x*scale,y:dy+q.y*scale}));
             liveOutline.target=core.alignCorners(target,liveOutline.current);
             liveOutline.seenAt=performance.now();liveOutline.recognized=recognized;
-          }else{steady=0;last=null;liveOutline.recognized=false;}
+          }else{stability=core.advanceLiveCapture(stability,null,false,started);liveOutline.recognized=false;}
           const margin=Math.max(4,Math.round(Math.min(img.width,img.height)*.012));
           const reason=!found?'no-blue-label-candidate':found.coverage<.10?'too-small':found.fill<.68||found.fill>1.08?'unreliable-shape':
             found.corners.some(q=>q.x<margin||q.y<margin||q.x>=img.width-margin||q.y>=img.height-margin)?'touches-camera-edge':'candidate-visible';
-          event('camera-frame',{reason,acceptable,steady,frameWidth:img.width,frameHeight:img.height,
+          event('camera-frame',{reason,acceptable,steady:stability.steady,intervalMs,detectionMs:Math.round(performance.now()-started),frameWidth:img.width,frameHeight:img.height,
             coverage:found?.coverage||null,fill:found?.fill||null,ratio:found?.ratio||null,corners:found?.corners||null,
             overlayWidth:c.width,overlayHeight:c.height});
-          if(found&&!report.images['first-boundary.jpg'])report.images['first-boundary.jpg']=frameImage(img,found,'First detected outline');
-          cameraStatus.textContent=steady>=3?'✓ Label recognized. Scanning...':acceptable?'Label found. Keep it in view...':reason==='touches-camera-edge'?'Move back until the whole label fits.':'Point the camera at the full blue label.';
-          if(steady>=3){
+          cameraStatus.textContent=stability.steady>=2&&acceptable?'✓ Label recognized. Scanning...':acceptable?'Label found. Keep it in view...':reason==='touches-camera-edge'?'Move back until the whole label fits.':'Point the camera at the full blue label.';
+          if(stability.steady>=2&&acceptable){
             clearInterval(cameraTimer);cameraTimer=null;
             captureFrame('automatic',500);
           }
