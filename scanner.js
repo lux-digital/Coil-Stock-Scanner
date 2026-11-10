@@ -6,9 +6,8 @@
   const input = $('imageInput'), preview = $('preview'), scan = $('scanButton'), results = $('resultsCard');
   const progress = $('progressArea'), bar = $('progressBar'), status = $('progressText');
   const fullCanvas = document.createElement('canvas'), smallCanvas = document.createElement('canvas');
-  let image = null, url = null, worker = null, stream = null, cameraTimer = null, captureTimer = null, overlayFrame = null, scanning = false;
+  let image = null, url = null, worker = null, stream = null, cameraTimer = null, captureTimer = null, scanning = false;
   let lastLiveImage=null, lastLiveFound=null;
-  let liveOutline={target:null,current:null,seenAt:0,recognized:false,lastDraw:0};
   let report={startedAt:new Date().toISOString(),source:'none',events:[],images:{},stage:'ready'};
   function event(name,details={}) {report.events.push({at:new Date().toISOString(),name,...details});if(report.events.length>240)report.events.shift();}
   function showReportButton(){ $('saveLiveReport').hidden=false;$('reportHint').hidden=false; }
@@ -207,51 +206,27 @@
   $('captureNow').addEventListener('click',()=>captureFrame('manual'));
   function stopCamera(){
     if(cameraTimer){clearInterval(cameraTimer);cameraTimer=null;}
-    if(overlayFrame!==null){cancelAnimationFrame(overlayFrame);overlayFrame=null;}
-    liveOutline={target:null,current:null,seenAt:0,recognized:false,lastDraw:0};
     if(captureTimer){clearTimeout(captureTimer);captureTimer=null;}
     if(stream){stream.getTracks().forEach(track=>track.stop());stream=null;}
     video.srcObject=null;$('cameraPanel').hidden=true;$('startCamera').hidden=false;
   }
   $('stopCamera').addEventListener('click',()=>{event('camera-stopped');stopCamera();});
-  function drawLiveOverlay(now){
-    overlayFrame=requestAnimationFrame(drawLiveOverlay);
-    if(now-liveOutline.lastDraw<42)return;
-    const elapsed=liveOutline.lastDraw?Math.min(65,now-liveOutline.lastDraw):33;
-    liveOutline.lastDraw=now;
-    // A one-pixel canvas keeps the camera analysis responsive on older iPhones.
-    const c=overlay,w=c.clientWidth,h=c.clientHeight,dpr=1;
+  function drawLiveOutline(found,frame,recognized){
+    const c=overlay,w=c.clientWidth,h=c.clientHeight;
     if(!w||!h)return;
-    if(c.width!==Math.round(w*dpr)||c.height!==Math.round(h*dpr)){
-      c.width=Math.round(w*dpr);c.height=Math.round(h*dpr);
-    }
-    const ctx=c.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
-    const state=liveOutline;
-    if(!state.target||(!state.recognized&&now-state.seenAt>620)){state.current=null;return;}
-    const blend=1-Math.exp(-elapsed/170);
-    state.current=core.smoothCorners(state.current,state.target,blend);
-    const p=state.current,project=core.quadProjection(p);
-    const trace=points=>{ctx.beginPath();ctx.moveTo(points[0].x,points[0].y);
-      for(const point of points.slice(1))ctx.lineTo(point.x,point.y);ctx.closePath();};
-    ctx.save();trace(p);ctx.clip();
-    const fade=state.recognized?1:Math.min(1,(620-(now-state.seenAt))/220);
-    ctx.globalAlpha=Math.max(0,fade);
-    ctx.fillStyle=state.recognized?'rgba(0,220,105,.25)':'rgba(0,190,220,.075)';ctx.fillRect(0,0,w,h);
-    ctx.lineWidth=1;ctx.strokeStyle=state.recognized?'rgba(127,255,180,.45)':'rgba(105,239,255,.38)';
-    for(let u=1;u<6;u++){const a=project(u/6,0),b=project(u/6,1);
-      ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}
-    for(let v=1;v<4;v++){const a=project(0,v/4),b=project(1,v/4);
-      ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}
-    const sweep=state.recognized?.5:(now/1250)%1,top=Math.max(0,sweep-.065),bottom=Math.min(1,sweep+.065);
-    trace([project(0,top),project(1,top),project(1,bottom),project(0,bottom)]);
-    ctx.fillStyle=state.recognized?'rgba(150,255,180,.19)':'rgba(120,243,255,.20)';ctx.fill();
-    const left=project(0,sweep),right=project(1,sweep);
-    ctx.strokeStyle=state.recognized?'#9effbb':'#83f4ff';ctx.lineWidth=2.5;
-    ctx.beginPath();ctx.moveTo(left.x,left.y);ctx.lineTo(right.x,right.y);ctx.stroke();ctx.restore();
-    trace(p);ctx.strokeStyle=state.recognized?'#00e477':'#ffd45c';ctx.lineWidth=4;ctx.lineJoin='round';
-    ctx.stroke();
-    if(state.recognized){
-      const center=project(.5,.5),r=Math.max(23,Math.min(36,Math.min(w,h)*.075));
+    if(c.width!==w||c.height!==h){c.width=w;c.height=h;}
+    const ctx=c.getContext('2d');ctx.clearRect(0,0,w,h);
+    if(!found)return;
+    const scale=Math.min(w/frame.width,h/frame.height),dx=(w-frame.width*scale)/2,dy=(h-frame.height*scale)/2;
+    const points=found.corners.map(p=>({x:dx+p.x*scale,y:dy+p.y*scale}));
+    ctx.beginPath();ctx.moveTo(points[0].x,points[0].y);
+    for(const p of points.slice(1))ctx.lineTo(p.x,p.y);
+    ctx.closePath();ctx.lineJoin='round';ctx.lineWidth=4;
+    if(recognized){ctx.fillStyle='rgba(0,220,105,.28)';ctx.fill();}
+    ctx.strokeStyle=recognized?'#00e477':'#ffd45c';ctx.stroke();
+    if(recognized){
+      const center=points.reduce((sum,p)=>({x:sum.x+p.x/4,y:sum.y+p.y/4}),{x:0,y:0});
+      const r=Math.max(23,Math.min(36,Math.min(w,h)*.075));
       ctx.fillStyle='#00a94f';ctx.beginPath();ctx.arc(center.x,center.y,r,0,Math.PI*2);ctx.fill();
       ctx.strokeStyle='#fff';ctx.lineWidth=7;ctx.lineCap='round';ctx.beginPath();
       ctx.moveTo(center.x-r*.45,center.y);ctx.lineTo(center.x-r*.1,center.y+r*.33);
@@ -270,8 +245,7 @@
       report.stage='camera-running';event('camera-started',report.camera);
       $('cameraPanel').hidden=false;$('startCamera').hidden=true;
       lastLiveImage=null;lastLiveFound=null;
-      liveOutline={target:null,current:null,seenAt:0,recognized:false,lastDraw:0};
-      overlayFrame=requestAnimationFrame(drawLiveOverlay);
+      drawLiveOutline(null,{width:1,height:1},false);
       let stability={last:null,lastSeen:0,steady:0},busy=false,lastFrameAt=0;
       cameraTimer=setInterval(()=>{
         if(busy||scanning||!video.videoWidth)return;busy=true;
@@ -280,19 +254,18 @@
           // Live detection only needs a small frame; the captured photo keeps camera resolution.
           const img=imageData(video,480),found=core.detectLabel(img);
           lastLiveImage=img;lastLiveFound=found;
-          const c=overlay,width=c.clientWidth,height=c.clientHeight;
+          const c=overlay;
           let acceptable=false;
           if(found){
-            const p=found.corners;
             acceptable=core.labelReady(found,img.width,img.height);
-            const scale=Math.min(width/img.width,height/img.height),dx=(width-img.width*scale)/2,dy=(height-img.height*scale)/2;
             // Compare the label's overall position, so ordinary hand movement does not restart capture.
             stability=core.advanceLiveCapture(stability,found,acceptable,started);
             const recognized=acceptable&&stability.steady>=2;
-            const target=p.map(q=>({x:dx+q.x*scale,y:dy+q.y*scale}));
-            liveOutline.target=core.alignCorners(target,liveOutline.current);
-            liveOutline.seenAt=performance.now();liveOutline.recognized=recognized;
-          }else{stability=core.advanceLiveCapture(stability,null,false,started);liveOutline.recognized=false;}
+            drawLiveOutline(found,img,recognized);
+          }else{
+            stability=core.advanceLiveCapture(stability,null,false,started);
+            if(!stability.last)drawLiveOutline(null,img,false);
+          }
           const margin=Math.max(4,Math.round(Math.min(img.width,img.height)*.012));
           const reason=!found?'no-blue-label-candidate':found.coverage<.10?'too-small':found.fill<.68||found.fill>1.08?'unreliable-shape':
             found.corners.some(q=>q.x<margin||q.y<margin||q.x>=img.width-margin||q.y>=img.height-margin)?'touches-camera-edge':'candidate-visible';
