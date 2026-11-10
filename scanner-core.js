@@ -71,6 +71,34 @@
     const margin = Math.max(4, Math.round(Math.min(width, height) * .012));
     return found.corners.every(p => p.x >= margin && p.y >= margin && p.x < width-margin && p.y < height-margin);
   }
+  function refineBorderCorners(image,found) {
+    if(!found)return found;
+    const {width:w,height:h,data}=image,margin=Math.max(4,Math.round(Math.min(w,h)*.012));
+    const top=found.corners.filter(p=>p.y<margin);
+    if(top.length!==2 || found.coverage<.5)return found;
+    const dark=(x,y)=>{const i=(y*w+x)*4;return data[i]<85&&data[i+1]<130&&data[i+2]<135;};
+    // If a blue cast joined the label to both top corners of the camera frame,
+    // recover its black printed border. Require three strong, independent edges.
+    const x0=Math.round(w*.2),x1=Math.round(w*.8);
+    let topY=-1,topScore=0;
+    for(let y=2;y<Math.min(h*.15,85);y++){
+      let score=0;for(let x=x0;x<x1;x++)if(dark(x,y))score++;
+      if(score>topScore){topScore=score;topY=y;}
+    }
+    if(topScore<(x1-x0)*.45)return found;
+    const y0=Math.max(topY+20,Math.round(h*.12)),y1=Math.min(h-10,Math.round(h*.82));
+    const peak=(from,to)=>{let xBest=-1,best=0;
+      for(let x=from;x<to;x++){
+        let score=0;for(let y=y0;y<y1;y++)if(dark(x,y))score++;
+        if(score>best){best=score;xBest=x;}
+      }
+      return {x:xBest,score:best};
+    };
+    const left=peak(Math.round(w*.05),Math.round(w*.3)),right=peak(Math.round(w*.7),Math.round(w*.95));
+    if(left.score<(y1-y0)*.30||right.score<(y1-y0)*.30)return found;
+    const corners=found.corners.map(p=>top.includes(p)?{x:p.x<w/2?left.x:right.x,y:topY}:p);
+    return {...found,corners,coverage:polygonArea(corners)/(w*h),borderRefined:true};
+  }
   function sameLiveLabel(a,b) {
     if(!a||!b)return false;
     const bounds=found=>({left:Math.min(...found.corners.map(p=>p.x)),right:Math.max(...found.corners.map(p=>p.x)),
@@ -163,5 +191,5 @@
   function orientationScore(text) {
     const t=text.toUpperCase();return (t.match(/COIL|COATED|STEEL|PART|CSM|CLR|ASTM|VANCOUVER|KOREA|LBS|UNION|NET|GROSS|WEIGHT/g)||[]).length;
   }
-  return {FIELD_IDS,blueMask,detectLabel,labelReady,sameLiveLabel,advanceLiveCapture,reconcileCaptureCorners,warp,rotate,enhance,crop,orientationScore};
+  return {FIELD_IDS,blueMask,detectLabel,labelReady,refineBorderCorners,sameLiveLabel,advanceLiveCapture,reconcileCaptureCorners,warp,rotate,enhance,crop,orientationScore};
 });
