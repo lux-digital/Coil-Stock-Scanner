@@ -14,3 +14,15 @@ assert(core.sameLiveLabel(frames[0],frames[1]));
 assert(core.sameLiveLabel(frames[1],frames[2]));
 assert(!core.sameLiveLabel(frames[0],candidate([[15,15],[90,15],[90,160],[15,160]])));
 assert(!core.labelReady(candidate([[1,60],[275,60],[275,490],[1,490]]),360,640));
+
+let state={last:null,lastSeen:0,steady:0};
+state=core.advanceLiveCapture(state,frames[0],true,1000);
+assert.equal(state.steady,1);
+state=core.advanceLiveCapture(state,null,false,1180);
+assert.equal(state.steady,1); // A single noisy frame must not restart capture.
+state=core.advanceLiveCapture(state,frames[1],true,1360);
+assert.equal(state.steady,2);
+state=core.advanceLiveCapture(state,null,false,2300);
+assert.equal(state.steady,0);
+state=core.advanceLiveCapture(state,frames[2],true,2500);
+assert.equal(state.steady,1); // A new label still needs a second reading.

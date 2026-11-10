@@ -81,6 +81,12 @@
       Math.max(0,Math.min(x.bottom,y.bottom)-Math.max(x.top,y.top));
     return areaX>0&&areaY>0&&intersection/(areaX+areaY-intersection)>.60;
   }
+  function advanceLiveCapture(state,found,acceptable,now) {
+    if(found&&acceptable)return {last:found,lastSeen:now,
+      steady:state.last&&now-state.lastSeen<850&&sameLiveLabel(found,state.last)?state.steady+1:1};
+    if(found||now-state.lastSeen>850)return {last:null,lastSeen:0,steady:0};
+    return state; // A brief missed detection should not restart the countdown.
+  }
   function alignCorners(corners, previous) {
     if (!previous) return corners.map(p=>({...p}));
     const choices=[0,1,2,3].map(shift=>corners.map((_,i)=>corners[(i+shift)%4]));
@@ -161,5 +167,5 @@
   function orientationScore(text) {
     const t=text.toUpperCase();return (t.match(/COIL|COATED|STEEL|PART|CSM|CLR|ASTM|VANCOUVER|KOREA|LBS|UNION|NET|GROSS|WEIGHT/g)||[]).length;
   }
-  return {FIELD_IDS,blueMask,detectLabel,labelReady,sameLiveLabel,alignCorners,smoothCorners,quadProjection,warp,rotate,enhance,crop,orientationScore};
+  return {FIELD_IDS,blueMask,detectLabel,labelReady,sameLiveLabel,advanceLiveCapture,alignCorners,smoothCorners,quadProjection,warp,rotate,enhance,crop,orientationScore};
 });
