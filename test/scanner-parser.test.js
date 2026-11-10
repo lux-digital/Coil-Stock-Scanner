@@ -61,3 +61,13 @@ assert.equal(parse({idTight:'J7TRAGOA'}).coilId,'');
 
 // Keep the original colour reading if the isolated crop misreads a valid code.
 assert.equal(parse({right:'PVDF PRINT CEDAR(\nPW15I',colourCodeTight:'PW15T'}).colour,'PW15I');
+
+// November 10 phone diagnostics: the colour name and metric length survive noisy side crops.
+const pecan=parse({right:'was PECAN (PW495) / B',length:'2432\n[741 Mm]',gross:'29,943',grossAlt:'wr9,943',net:'9,701'});
+assert.equal(pecan.colour,'PECAN (PW495) / B');
+assert.equal(pecan.lengthM,'741');
+assert.equal(pecan.grossLb,'9943');
+assert(pecan.review.includes('grossLb'));
+const onyx=parse({right:'BLACK ONYX(K1@31)\nKTO31',length:'[a0 # 100',lengthAlt:'{ 740 # TOP'});
+assert.equal(onyx.colour,'BLACK ONYX(KT031)');
+assert.equal(onyx.lengthFt,'');

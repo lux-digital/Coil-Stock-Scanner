@@ -6,8 +6,9 @@
   const input = $('imageInput'), preview = $('preview'), scan = $('scanButton'), results = $('resultsCard');
   const progress = $('progressArea'), bar = $('progressBar'), status = $('progressText');
   const fullCanvas = document.createElement('canvas'), smallCanvas = document.createElement('canvas');
-  let image = null, url = null, worker = null, stream = null, cameraTimer = null, captureTimer = null, scanning = false;
+  let image = null, url = null, worker = null, stream = null, cameraTimer = null, captureTimer = null, overlayFrame = null, scanning = false;
   let lastLiveImage=null, lastLiveFound=null;
+  let liveOutline={target:null,current:null,seenAt:0,recognized:false,lastDraw:0};
   let report={startedAt:new Date().toISOString(),source:'none',events:[],images:{},stage:'ready'};
   function event(name,details={}) {report.events.push({at:new Date().toISOString(),name,...details});if(report.events.length>240)report.events.shift();}
   function showReportButton(){ $('saveLiveReport').hidden=false;$('reportHint').hidden=false; }
@@ -151,7 +152,7 @@
         left:[.025,.14,.44,.25],right:[.57,.37,.40,.35],
         net:[.04,.53,.20,.14],gross:[.22,.53,.22,.14],
         length:[.42,.53,.20,.14],id:[.33,.62,.33,.16],
-        idTight:[.39,.655,.22,.095]
+        idTight:[.405,.612,.23,.098]
       };
       const parts={};for(const [key,rect] of Object.entries(regions)){
         if(key!=='idTight')parts[key]=await recognizeRegion(ocr,enhanced,rect);
@@ -173,7 +174,9 @@
       await ocr.setParameters({tessedit_pageseg_mode:'7',tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'});
       parts.idTight=(await ocr.recognize(straight,{rectangle:{left:Math.round(straight.width*regions.idTight[0]),top:Math.round(straight.height*regions.idTight[1]),
         width:Math.round(straight.width*regions.idTight[2]),height:Math.round(straight.height*regions.idTight[3])}})).data.text;
-      parts.idUpscaled=await recognizeEnlarged(ocr,straight,[.395,.642,.225,.096]);
+      parts.idUpscaled=await recognizeEnlarged(ocr,straight,[.365,.595,.27,.105]);
+      await ocr.setParameters({tessedit_pageseg_mode:'7',tessedit_char_whitelist:''});
+      parts.lengthMetricTight=await recognizeEnlarged(ocr,straight,[.47,.585,.085,.043]);
       await ocr.setParameters({tessedit_pageseg_mode:'8'});
       parts.colourCodeTight=await recognizeEnlarged(ocr,straight,[.675,.595,.095,.07]);
       await ocr.setParameters({tessedit_char_whitelist:''});
@@ -203,11 +206,56 @@
   $('captureNow').addEventListener('click',()=>captureFrame('manual'));
   function stopCamera(){
     if(cameraTimer){clearInterval(cameraTimer);cameraTimer=null;}
+    if(overlayFrame!==null){cancelAnimationFrame(overlayFrame);overlayFrame=null;}
+    liveOutline={target:null,current:null,seenAt:0,recognized:false,lastDraw:0};
     if(captureTimer){clearTimeout(captureTimer);captureTimer=null;}
     if(stream){stream.getTracks().forEach(track=>track.stop());stream=null;}
     video.srcObject=null;$('cameraPanel').hidden=true;$('startCamera').hidden=false;
   }
   $('stopCamera').addEventListener('click',()=>{event('camera-stopped');stopCamera();});
+  function drawLiveOverlay(now){
+    overlayFrame=requestAnimationFrame(drawLiveOverlay);
+    if(now-liveOutline.lastDraw<30)return;
+    const elapsed=liveOutline.lastDraw?Math.min(65,now-liveOutline.lastDraw):33;
+    liveOutline.lastDraw=now;
+    const c=overlay,w=c.clientWidth,h=c.clientHeight,dpr=Math.min(2,window.devicePixelRatio||1);
+    if(!w||!h)return;
+    if(c.width!==Math.round(w*dpr)||c.height!==Math.round(h*dpr)){
+      c.width=Math.round(w*dpr);c.height=Math.round(h*dpr);
+    }
+    const ctx=c.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
+    const state=liveOutline;
+    if(!state.target||(!state.recognized&&now-state.seenAt>620)){state.current=null;return;}
+    const blend=1-Math.exp(-elapsed/75);
+    state.current=core.smoothCorners(state.current,state.target,blend);
+    const p=state.current,project=core.quadProjection(p);
+    const trace=points=>{ctx.beginPath();ctx.moveTo(points[0].x,points[0].y);
+      for(const point of points.slice(1))ctx.lineTo(point.x,point.y);ctx.closePath();};
+    ctx.save();trace(p);ctx.clip();
+    const fade=state.recognized?1:Math.min(1,(620-(now-state.seenAt))/220);
+    ctx.globalAlpha=Math.max(0,fade);
+    ctx.fillStyle=state.recognized?'rgba(0,220,105,.25)':'rgba(0,190,220,.075)';ctx.fillRect(0,0,w,h);
+    ctx.lineWidth=1;ctx.strokeStyle=state.recognized?'rgba(127,255,180,.45)':'rgba(105,239,255,.38)';
+    for(let u=1;u<6;u++){const a=project(u/6,0),b=project(u/6,1);
+      ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}
+    for(let v=1;v<4;v++){const a=project(0,v/4),b=project(1,v/4);
+      ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}
+    const sweep=state.recognized?.5:(now/1250)%1,top=Math.max(0,sweep-.065),bottom=Math.min(1,sweep+.065);
+    trace([project(0,top),project(1,top),project(1,bottom),project(0,bottom)]);
+    ctx.fillStyle=state.recognized?'rgba(150,255,180,.19)':'rgba(120,243,255,.20)';ctx.fill();
+    const left=project(0,sweep),right=project(1,sweep);
+    ctx.strokeStyle=state.recognized?'#9effbb':'#83f4ff';ctx.lineWidth=2.5;ctx.shadowBlur=12;ctx.shadowColor=ctx.strokeStyle;
+    ctx.beginPath();ctx.moveTo(left.x,left.y);ctx.lineTo(right.x,right.y);ctx.stroke();ctx.restore();
+    trace(p);ctx.strokeStyle=state.recognized?'#00e477':'#ffd45c';ctx.lineWidth=4;ctx.lineJoin='round';
+    ctx.shadowBlur=state.recognized?14:7;ctx.shadowColor=ctx.strokeStyle;ctx.stroke();ctx.shadowBlur=0;
+    if(state.recognized){
+      const center=project(.5,.5),r=Math.max(23,Math.min(36,Math.min(w,h)*.075));
+      ctx.fillStyle='#00a94f';ctx.beginPath();ctx.arc(center.x,center.y,r,0,Math.PI*2);ctx.fill();
+      ctx.strokeStyle='#fff';ctx.lineWidth=7;ctx.lineCap='round';ctx.beginPath();
+      ctx.moveTo(center.x-r*.45,center.y);ctx.lineTo(center.x-r*.1,center.y+r*.33);
+      ctx.lineTo(center.x+r*.52,center.y-r*.4);ctx.stroke();
+    }
+  }
   $('startCamera').addEventListener('click',async()=>{
     if(scanning)return;
     resetReport('live-camera');report.stage='camera-starting';
@@ -219,6 +267,8 @@
       report.camera={width:video.videoWidth,height:video.videoHeight,frameRate:settings.frameRate||null,facingMode:settings.facingMode||null};
       report.stage='camera-running';event('camera-started',report.camera);
       $('cameraPanel').hidden=false;$('startCamera').hidden=true;
+      liveOutline={target:null,current:null,seenAt:0,recognized:false,lastDraw:0};
+      overlayFrame=requestAnimationFrame(drawLiveOverlay);
       let last=null,steady=0,busy=false;
       cameraTimer=setInterval(()=>{
         if(busy||scanning||!video.videoWidth)return;busy=true;
@@ -227,30 +277,19 @@
           const img=imageData(video,480),found=core.detectLabel(img);
           lastLiveImage=img;lastLiveFound=found;
           const c=overlay,width=c.clientWidth,height=c.clientHeight;
-          if(c.width!==width||c.height!==height){c.width=width;c.height=height;}
-          const context=c.getContext('2d');context.clearRect(0,0,c.width,c.height);
           let acceptable=false;
           if(found){
             const p=found.corners;
             acceptable=core.labelReady(found,img.width,img.height);
-            const scale=Math.min(c.width/img.width,c.height/img.height),dx=(c.width-img.width*scale)/2,dy=(c.height-img.height*scale)/2;
-            context.lineWidth=5;context.lineJoin='round';context.beginPath();
-            context.moveTo(dx+p[0].x*scale,dy+p[0].y*scale);
-            for(const q of p.slice(1))context.lineTo(dx+q.x*scale,dy+q.y*scale);context.closePath();
+            const scale=Math.min(width/img.width,height/img.height),dx=(width-img.width*scale)/2,dy=(height-img.height*scale)/2;
             // Compare the label's overall position, so ordinary hand movement does not restart capture.
             steady=acceptable?(last&&core.sameLiveLabel(found,last)?steady+1:1):0;
             last=acceptable?found:null;
             const recognized=acceptable&&steady>=3;
-            if(recognized){context.fillStyle='rgba(16, 185, 92, .30)';context.fill();}
-            context.strokeStyle=recognized?'#00d967':'#ffcf50';context.lineWidth=5;context.stroke();
-            if(recognized){
-              const center=p.reduce((sum,q)=>({x:sum.x+q.x/4,y:sum.y+q.y/4}),{x:0,y:0});
-              const cx=dx+center.x*scale,cy=dy+center.y*scale,r=Math.max(23,Math.min(36,Math.min(c.width,c.height)*.075));
-              context.fillStyle='#00a94f';context.beginPath();context.arc(cx,cy,r,0,Math.PI*2);context.fill();
-              context.strokeStyle='#fff';context.lineWidth=7;context.lineCap='round';context.beginPath();
-              context.moveTo(cx-r*.45,cy);context.lineTo(cx-r*.10,cy+r*.33);context.lineTo(cx+r*.52,cy-r*.40);context.stroke();
-            }
-          }else{steady=0;last=null;}
+            const target=p.map(q=>({x:dx+q.x*scale,y:dy+q.y*scale}));
+            liveOutline.target=core.alignCorners(target,liveOutline.current);
+            liveOutline.seenAt=performance.now();liveOutline.recognized=recognized;
+          }else{steady=0;last=null;liveOutline.recognized=false;}
           const margin=Math.max(4,Math.round(Math.min(img.width,img.height)*.012));
           const reason=!found?'no-blue-label-candidate':found.coverage<.10?'too-small':found.fill<.68||found.fill>1.08?'unreliable-shape':
             found.corners.some(q=>q.x<margin||q.y<margin||q.x>=img.width-margin||q.y>=img.height-margin)?'touches-camera-edge':'candidate-visible';
