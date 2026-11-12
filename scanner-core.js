@@ -16,16 +16,19 @@
     return lo.slice(0,-1).concat(hi.slice(0,-1));
   }
   const polygonArea = p => Math.abs(p.reduce((s,a,i)=>{ const b=p[(i+1)%p.length]; return s+a.x*b.y-a.y*b.x; },0)/2);
-  function blueMask(image) {
+  function blueMask(image, shadowAware=false) {
     const {data,width:w,height:h}=image, mask=new Uint8Array(w*h);
     for(let i=0;i<mask.length;i++) {
       const r=data[4*i],g=data[4*i+1],b=data[4*i+2];
-      mask[i]=g-r>28 && b-r>32 && g>50 && b>55 && b/g>.76 && b/g<1.8 ? 1:0;
+      // Dim previews compress the cyan/red difference even when the blue
+      // label remains distinct from the grey steel around it.
+      mask[i]=(shadowAware?g-r>16 && b-r>18 && g>28 && b>30 && b/g>.72 && b/g<1.8:
+        g-r>28 && b-r>32 && g>50 && b>55 && b/g>.76 && b/g<1.8) ? 1:0;
     }
     return mask;
   }
-  function detectLabel(image) {
-    const {width:w,height:h}=image, n=w*h, mask=blueMask(image), seen=new Uint8Array(n), queue=new Int32Array(n);
+  function detectMaskedLabel(image,mask) {
+    const {width:w,height:h}=image, n=w*h, seen=new Uint8Array(n), queue=new Int32Array(n);
     let best=null;
     for(let seed=0;seed<n;seed++) {
       if(!mask[seed]||seen[seed])continue;
@@ -65,6 +68,18 @@
       if(!best||score>best.score)best={corners:poly,score,coverage:area/n,fill,ratio};
     }
     return best;
+  }
+  function detectLabel(image) {
+    const strict=detectMaskedLabel(image,blueMask(image));
+    const strictReady=labelReady(strict,image.width,image.height);
+    if(strictReady&&strict.fill>=.90&&strict.ratio<=2.6&&strict.coverage>=.25)return strict;
+    // A thin strict mask can fit a smaller rectangle inside a shadowed label.
+    // Spend the extra pass when it is missing, has holes or spans an unusually
+    // narrow part of the frame.
+    const shadow=detectMaskedLabel(image,blueMask(image,true));
+    if(labelReady(shadow,image.width,image.height)&&
+      (!strictReady||shadow.coverage>strict.coverage*1.10))return {...shadow,shadowMask:true};
+    return strict|| (shadow ? {...shadow,shadowMask:true}:null);
   }
   function labelReady(found, width, height) {
     if (!found || found.coverage < .10 || found.fill < .68 || found.fill > 1.08) return false;
