@@ -22,10 +22,10 @@
         That means this test needs an internet connection.
     -->
     <script defer src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
-    <script defer src="scanner-core.js?v=11"></script>
-    <script defer src="scanner-parser.js?v=6"></script>
+    <script defer src="scanner-core.js?v=12"></script>
+    <script defer src="scanner-parser.js?v=7"></script>
     <script defer src="diagnostics.js?v=3"></script>
-    <script defer src="scanner.js?v=14"></script>
+    <script defer src="scanner.js?v=15"></script>
 
     <style>
         * {
@@ -425,10 +425,11 @@
                 <canvas id="cameraOverlay" aria-hidden="true"></canvas>
                 <button type="button" id="torchButton" aria-pressed="false" disabled>FLASHLIGHT OFF</button>
             </div>
-            <p id="cameraStatus" role="status">Point the camera at the blue label.</p>
+            <p id="cameraStatus" role="status">Keep aiming until you hear the capture chime. The scanner waits for sharp, steady text.</p>
             <p id="torchMessage" role="status" hidden></p>
             <div class="buttons">
                 <button class="primary" id="captureNow">CAPTURE NOW</button>
+                <button class="secondary" id="testSound" type="button">TEST CAPTURE SOUND</button>
                 <button class="secondary" id="stopCamera">STOP CAMERA</button>
             </div>
         </div>

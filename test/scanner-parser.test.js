@@ -99,3 +99,19 @@ assert.equal(wrongMetric.lengthM,'');
 assert.equal(parse({right:'PART NO L2098V\nKNOTTY CHESTNUT(P'}).colour,'KNOTTY CHESTNUT');
 assert.equal(parse({idTight:'JSAA91M',idWide:'J8AA91M'}).coilId,'J8AA91M');
 assert.equal(parse({length:'2330 FT',lengthAlt:'e710 METSTS'}).lengthM,'710');
+
+// November 12 dark scans: the large three-column row survived when small
+// unit text did not, while a separate whole-word ID read resolved Z versus 7.
+const dimRow=parse({weightBand:'§ 8,951 ~ 9,194 = 2363 |',gross:'2,174 Ag |',length:'= 2363'});
+assert.deepEqual([dimRow.netLb,dimRow.grossLb,dimRow.lengthFt],['8951','9194','2363']);
+assert.equal(dimRow.netKg,'');
+const darkOnyx=parse({right:'BLACK ONYX(KT@31)',idTight:'J2SA907',id:'J2SA9OZ...',
+  idLine:'J2SA90Z',net:'9,899 LBS\n[ 45490 Kg ]',gross:'10,142\n[4,600 Kg]'});
+assert.equal(darkOnyx.coilId,'J2SA90Z');
+assert.equal(darkOnyx.colour,'BLACK ONYX(KT031)');
+assert(darkOnyx.review.includes('coilId'));
+const shadowUnits=parse({net:'9,921 LBS',gross:'10,164 LBS',length:'2428 FT',
+  netWide:'E [ 4,500 Vg |',grossAlt:'(4,610 vy |',weightBand:'{ 740 ¥ |'});
+assert.deepEqual([shadowUnits.netKg,shadowUnits.grossKg,shadowUnits.lengthM],['4500','4610','740']);
+assert(shadowUnits.review.includes('grossKg'));
+assert.equal(parse({gross:'10,164 LBS',grossAlt:'(5,610 vy |'}).grossKg,'');
