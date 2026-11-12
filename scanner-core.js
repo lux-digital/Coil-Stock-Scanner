@@ -64,8 +64,11 @@
       if(distance(poly[0],poly[1])+distance(poly[2],poly[3]) < distance(poly[1],poly[2])+distance(poly[3],poly[0]))poly.push(poly.shift());
       const ratio=(distance(poly[0],poly[1])+distance(poly[2],poly[3]))/(distance(poly[1],poly[2])+distance(poly[3],poly[0]));
       if(ratio<1.15||ratio>4)continue;
-      const score=area*Math.min(fill,1);
-      if(!best||score>best.score)best={corners:poly,score,coverage:area/n,fill,ratio};
+      const score=area*Math.min(fill,1),candidate={corners:poly,score,coverage:area/n,fill,ratio};
+      // A bright sky or blue reflection can have more pixels than the label.
+      // Prefer a complete, in-frame label over a clipped region at the edge.
+      const ready=labelReady(candidate,w,h),bestReady=labelReady(best,w,h);
+      if(!best||(ready&&!bestReady)||(ready===bestReady&&score>best.score))best=candidate;
     }
     return best;
   }
@@ -244,6 +247,21 @@
     return {last:found,lastSeen:now,steady,stableSince:steady?(stable&&state.stableSince?state.stableSince:now):0,
       motion:Number.isFinite(motion)?motion:null};
   }
+  function advanceReachCapture(state,found,acceptable,now) {
+    const blank={last:null,lastSeen:0,firstSeen:0,visible:0};
+    if(!found||!acceptable)return state.last&&now-state.lastSeen<1100?state:blank;
+    const continuing=state.last&&now-state.lastSeen<1100&&sameLiveLabel(state.last,found);
+    return {last:found,lastSeen:now,firstSeen:continuing?state.firstSeen:now,
+      visible:continuing?state.visible+1:1};
+  }
+  function reachCaptureReady(state,now,bestDetail) {
+    if(state.visible<7||!state.last||!bestDetail)return false;
+    const held=now-state.firstSeen;
+    // A near-sharp overhead frame can be saved promptly. If focus never
+    // settles, save the best actual frame after a bounded hands-free wait.
+    return bestDetail>=90&&held>=1600||bestDetail>=55&&held>=3000||
+      bestDetail>=30&&held>=5000||bestDetail>=15&&held>=7000;
+  }
   function reconcileCaptureCorners(found,live,width,height,liveWidth,liveHeight) {
     if(!live||!liveWidth||!liveHeight||!labelReady(live,liveWidth,liveHeight))return {found,corrected:[]};
     const prior=live.corners.map(p=>({x:p.x*width/liveWidth,y:p.y*height/liveHeight}));
@@ -320,5 +338,5 @@
   function orientationScore(text) {
     const t=text.toUpperCase();return (t.match(/COIL|COATED|STEEL|PART|CSM|CLR|ASTM|VANCOUVER|KOREA|LBS|UNION|NET|GROSS|WEIGHT/g)||[]).length;
   }
-  return {FIELD_IDS,blueMask,detectLabel,labelReady,refineBorderCorners,refineShadowBoundary,sameLiveLabel,cornerMotion,labelDetail,advanceLiveCapture,reconcileCaptureCorners,warp,rotate,enhance,crop,orientationScore};
+  return {FIELD_IDS,blueMask,detectLabel,labelReady,refineBorderCorners,refineShadowBoundary,sameLiveLabel,cornerMotion,labelDetail,advanceLiveCapture,advanceReachCapture,reachCaptureReady,reconcileCaptureCorners,warp,rotate,enhance,crop,orientationScore};
 });

@@ -34,7 +34,7 @@
       const metadata={version:'3',exportedAt:new Date().toISOString(),source:report.source,startedAt:report.startedAt,stage:report.stage,
         browser:navigator.userAgent,screen:{width:screen.width,height:screen.height,devicePixelRatio:devicePixelRatio},
         viewport:{width:innerWidth,height:innerHeight},
-        camera:report.camera||null,events:report.events,detection:report.detection||null,
+        camera:report.camera||null,capture:report.capture||null,events:report.events,detection:report.detection||null,
         orientation:report.orientation||null,ocr:report.ocr||null,parsed:report.parsed||null,error:report.error||null,
         displayedFields:Object.fromEntries(core.FIELD_IDS.map(id=>[id,$(id).value]))};
       const files=[['README.txt','Coil Scanner test report. Attach this ZIP to the chat. Photos and OCR results stayed on the device until you downloaded this file.\n'],
@@ -87,6 +87,7 @@
   }
   function check(data) {
     const messages=[],bad=new Set(),confirmed=new Set(),numeric=id=>Number(data[id]);
+    if(report.capture?.mode==='automatic-reach')messages.push('Overhead photo used the best available frame. Check every reading against the image.');
     for(const id of data.review||[]){bad.add(id);messages.push('Check '+$(id).previousElementSibling.textContent.toLowerCase()+' against the label.');}
     for(const [a,b,f,name] of [['netLb','netKg',.45359237,'Net weight'],['grossLb','grossKg',.45359237,'Gross weight'],['lengthFt','lengthM',.3048,'Length']]) {
       if(!data[a]||!data[b]){bad.add(a);bad.add(b);continue;}
@@ -338,12 +339,12 @@
     const track=stream?.getVideoTracks()[0];
     if(track&&torchAvailable&&!torchBusy)setTorch(track,!torchActive);
   });
-  function captureFrame(reason, showCheckFor=0,quality=null){
+  function captureFrame(reason, showCheckFor=0,quality=null,saved=null){
     if(!stream||!video.videoWidth||scanning)return false;
-    const frame=lastLiveImage||imageData(video,640),found=lastLiveFound||findLabel(frame);
+    const frame=saved?.frame||lastLiveImage||imageData(video,640),found=saved?.found||lastLiveFound||findLabel(frame);
     capturedLive=found?{found,width:frame.width,height:frame.height}:null;
-    const capture=document.createElement('canvas');capture.width=video.videoWidth;capture.height=video.videoHeight;
-    capture.getContext('2d').drawImage(video,0,0);
+    const capture=saved?.canvas||document.createElement('canvas');
+    if(!saved){capture.width=video.videoWidth;capture.height=video.videoHeight;capture.getContext('2d').drawImage(video,0,0);}
     if(reason==='automatic'&&found){
       // Check the exact frame we will export, in case the camera delivered a
       // new blurred frame between the small preview and the full-resolution draw.
@@ -355,7 +356,12 @@
       }
       quality={...quality,actualQuality};
     }
+    if(reason==='automatic-reach'){
+      if(!saved||saved.quality.detail<15||saved.quality.glare>=.025)return false;
+      quality={...quality,previewQuality:saved.previewQuality,actualQuality:saved.quality};
+    }
     const dataURL=capture.toDataURL('image/jpeg',.9);report.images['original-frame.jpg']=dataURL;
+    report.capture={mode:reason,quality};
     event('camera-capture',{reason,corners:found?.corners||null,torchActive,quality,soundState:soundContext?.state||'unavailable'});
     captureCue(); // The chime follows a successfully saved frame, never a tentative green outline.
     if(showCheckFor)video.pause(); // Keep the green outline on the frame that was captured.
@@ -419,7 +425,9 @@
       if(torchRequested&&torchAvailable)await setTorch(track,true);
       lastLiveImage=null;lastLiveFound=null;
       drawLiveOutline(null,{width:1,height:1},false);
-      let stability={last:null,lastSeen:0,steady:0,stableSince:0},busy=false,lastFrameAt=0;
+      let stability={last:null,lastSeen:0,steady:0,stableSince:0};
+      let reach={last:null,lastSeen:0,firstSeen:0,visible:0},bestReach=null,lastReachSampleAt=0;
+      let busy=false,lastFrameAt=0;
       cameraTimer=setInterval(()=>{
         if(busy||scanning||!video.videoWidth)return;busy=true;
         try{
@@ -443,23 +451,48 @@
             stability=core.advanceLiveCapture(stability,null,false,started,null);
             if(!stability.last)drawLiveOutline(null,img,false);
           }
+          const nextReach=core.advanceReachCapture(reach,found,acceptable,started);
+          if(nextReach.firstSeen!==reach.firstSeen)bestReach=null;
+          reach=nextReach;
+          if(acceptable&&quality?.detail>=15&&quality.glare<.025&&
+            (!bestReach||quality.detail>bestReach.previewQuality.detail+6)&&
+            (!bestReach||started-lastReachSampleAt>=450||quality.detail>bestReach.previewQuality.detail+20)){
+            lastReachSampleAt=started;
+            // Hold one full-resolution frame, so the eventual hands-free save
+            // uses the sharpest observed image rather than a later blurry one.
+            const canvas=document.createElement('canvas');canvas.width=video.videoWidth;canvas.height=video.videoHeight;
+            canvas.getContext('2d').drawImage(video,0,0);
+            const actual=imageData(canvas,960),scaled={corners:found.corners.map(p=>({x:p.x*actual.width/img.width,y:p.y*actual.height/img.height}))};
+            const actualQuality=core.labelDetail(actual,scaled);
+            if(actualQuality.detail>=15&&actualQuality.glare<.025&&
+              (!bestReach||actualQuality.detail>bestReach.quality.detail+3))
+              bestReach={canvas,frame:img,found,quality:actualQuality,previewQuality:quality,at:started};
+          }
           const margin=Math.max(4,Math.round(Math.min(img.width,img.height)*.012));
           const reason=!found?'no-blue-label-candidate':found.coverage<.10?'too-small':found.fill<.68||found.fill>1.08?'unreliable-shape':
             found.corners.some(q=>q.x<margin||q.y<margin||q.x>=img.width-margin||q.y>=img.height-margin)?'touches-camera-edge':'candidate-visible';
           event('camera-frame',{reason,acceptable,steady:stability.steady,motion:stability.motion,quality,intervalMs,detectionMs:Math.round(performance.now()-started),frameWidth:img.width,frameHeight:img.height,
             coverage:found?.coverage||null,fill:found?.fill||null,ratio:found?.ratio||null,borderRefined:!!found?.borderRefined,
             shadowBorderRefined:!!found?.shadowBorderRefined,shadowMask:!!found?.shadowMask,
+            reachVisible:reach.visible,reachHeldMs:reach.firstSeen?Math.round(started-reach.firstSeen):0,
+            reachBestDetail:bestReach?.quality.detail||null,
             corners:found?.corners||null,
             overlayWidth:c.width,overlayHeight:c.height});
           const ready=acceptable&&stability.steady>=4&&started-stability.stableSince>=500;
-          cameraStatus.textContent=ready?'✓ Label sharp. Capturing...':acceptable&&quality?.glare>=.025?
+          const reachReady=acceptable&&core.reachCaptureReady(reach,started,bestReach?.quality.detail);
+          if(reachReady&&!ready)drawLiveOutline(found,img,true);
+          cameraStatus.textContent=ready?'✓ Label sharp. Capturing...':reachReady?'✓ Best available photo. Capturing...':acceptable&&quality?.glare>=.025?
             'Glare across the label. Tilt the phone slightly.':acceptable&&quality?.detail<110?
-            'Text is blurry. Hold steady and keep aiming.':acceptable?'Label found. Hold steady for the chime.':
+            'Hold steady for the hands-free capture chime.':acceptable?'Label found. Hold steady for the chime.':
             reason==='touches-camera-edge'?'Move back until the whole label fits.':'Point the camera at the full blue label.';
-          if(ready){
-            if(captureFrame('automatic',500,{...quality,steady:stability.steady,motion:stability.motion,heldMs:Math.round(started-stability.stableSince)})){
+          if(ready||reachReady){
+            const mode=ready?'automatic':'automatic-reach';
+            const metadata=ready?{...quality,steady:stability.steady,motion:stability.motion,heldMs:Math.round(started-stability.stableSince)}:
+              {heldMs:Math.round(started-reach.firstSeen),visible:reach.visible,bestAtMs:Math.round(started-bestReach.at)};
+            if(captureFrame(mode,500,metadata,ready?null:bestReach)){
               clearInterval(cameraTimer);cameraTimer=null;
-              cameraStatus.textContent='✓ Photo captured. You can lower the phone.';
+              cameraStatus.textContent=ready?'✓ Photo captured. You can lower the phone.':
+                '✓ Best available photo captured. You can lower the phone; review the readings.';
             }else stability={last:null,lastSeen:0,steady:0,stableSince:0};
           }
         }catch(error){console.error(error);report.error={message:error.message,stack:error.stack};report.stage='camera-error';event('camera-error',{message:error.message});stopCamera();cameraStatus.textContent='Camera preview stopped. Use the photo picker below.';}
