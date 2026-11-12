@@ -20,8 +20,8 @@
     x.fillStyle='rgba(0,0,0,.78)';x.fillRect(0,0,c.width,35);x.fillStyle='#fff';x.font='16px sans-serif';x.fillText(caption,10,24);
     return c.toDataURL('image/jpeg',.86);
   }
-  function maskImage(frame){
-    const mask=core.blueMask(frame),data=new Uint8ClampedArray(frame.width*frame.height*4);
+  function maskImage(frame,found){
+    const mask=core.blueMask(frame,!!found?.shadowMask),data=new Uint8ClampedArray(frame.width*frame.height*4);
     for(let i=0;i<mask.length;i++){const n=4*i;data[n]=mask[i]?35:25;data[n+1]=mask[i]?225:25;data[n+2]=mask[i]?236:25;data[n+3]=255;}
     return toCanvas({data,width:frame.width,height:frame.height}).toDataURL('image/png');
   }
@@ -29,7 +29,7 @@
     try{
       if(stream&&video.videoWidth){const frame=imageData(video,640);lastLiveImage=frame;lastLiveFound=findLabel(frame);}
       if(lastLiveImage){report.images['camera-boundary.jpg']=frameImage(lastLiveImage,lastLiveFound,report.stage);
-        report.images['blue-pixel-mask.png']=maskImage(lastLiveImage);}
+        report.images['blue-pixel-mask.png']=maskImage(lastLiveImage,lastLiveFound);}
       if(image&&!report.images['original-frame.jpg'])report.images['original-frame.jpg']=toCanvas(imageData(image,2400)).toDataURL('image/jpeg',.86);
       const metadata={version:'3',exportedAt:new Date().toISOString(),source:report.source,startedAt:report.startedAt,stage:report.stage,
         browser:navigator.userAgent,screen:{width:screen.width,height:screen.height,devicePixelRatio:devicePixelRatio},
@@ -135,9 +135,10 @@
       report.detection={imageWidth:small.width,imageHeight:small.height,corners:found?.corners||null,
         originalCorners:rawDetection?.corners||null,borderRefined:!!detected?.borderRefined,
         shadowBorderRefined:!!detected?.shadowBorderRefined,correctedCorners:adjusted.corrected,
-        coverage:found?.coverage||null,fill:found?.fill||null,ratio:found?.ratio||null};
+        coverage:found?.coverage||null,fill:found?.fill||null,ratio:found?.ratio||null,
+        shadowMask:!!found?.shadowMask};
       if(adjusted.corrected.length)event('crop-corner-corrected',{indices:adjusted.corrected});
-      report.images['scan-blue-mask.png']=maskImage(small);
+      report.images['scan-blue-mask.png']=maskImage(small,found);
       report.images['scan-boundary.jpg']=frameImage(small,found,'Boundary used for OCR');
       if(!found)throw new Error('The blue label could not be found. Move closer, keep the entire label visible, and try again.');
       const full=imageData(image,2400),corners=found.corners.map(p=>({x:p.x*full.width/small.width,y:p.y*full.height/small.height}));
@@ -360,7 +361,7 @@
     if(showCheckFor)video.pause(); // Keep the green outline on the frame that was captured.
     const finish=()=>{captureTimer=null;
       report.images['camera-boundary.jpg']=frameImage(frame,found,'Captured '+reason);
-      report.images['blue-pixel-mask.png']=maskImage(frame);
+      report.images['blue-pixel-mask.png']=maskImage(frame,found);
       stopCamera();image=new Image();image.onload=()=>{preview.src=dataURL;$('previewWrapper').style.display='block';runScan();};image.src=dataURL;};
     if(showCheckFor)captureTimer=setTimeout(finish,showCheckFor);else finish();
     return true;
@@ -447,7 +448,8 @@
             found.corners.some(q=>q.x<margin||q.y<margin||q.x>=img.width-margin||q.y>=img.height-margin)?'touches-camera-edge':'candidate-visible';
           event('camera-frame',{reason,acceptable,steady:stability.steady,motion:stability.motion,quality,intervalMs,detectionMs:Math.round(performance.now()-started),frameWidth:img.width,frameHeight:img.height,
             coverage:found?.coverage||null,fill:found?.fill||null,ratio:found?.ratio||null,borderRefined:!!found?.borderRefined,
-            shadowBorderRefined:!!found?.shadowBorderRefined,corners:found?.corners||null,
+            shadowBorderRefined:!!found?.shadowBorderRefined,shadowMask:!!found?.shadowMask,
+            corners:found?.corners||null,
             overlayWidth:c.width,overlayHeight:c.height});
           const ready=acceptable&&stability.steady>=4&&started-stability.stableSince>=500;
           cameraStatus.textContent=ready?'✓ Label sharp. Capturing...':acceptable&&quality?.glare>=.025?
