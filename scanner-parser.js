@@ -82,6 +82,10 @@
     const candidateText=[parts.idLine,parts.idTight,parts.idUpscaled,parts.idWide,parts.barcodeLine,parts.barcodeText,parts.id,parts.fullText,parts.idRaw]
       .map(text=>upper(text).replace(/\bJ\s+S(?=[0-9OQIL][A-Z0-9]{5})/g,'J')
         .replace(/\b([JH])\s+(?=[0-9OQILSB])/g,'$1')
+        // The tall stroke after J can be read as an extra I, and the last
+        // character of the large printed ID is occasionally separated.
+        .replace(/\b([JH])I(?=[0-9OQIL][A-Z0-9]{5}(?![A-Z0-9]))/g,'$1')
+        .replace(/\b([JH][0-9OQIL][A-Z0-9]{2}[0-9OQILS]{2})\s+(?=[A-Z0-9](?![A-Z0-9]))/g,'$1')
         .replace(/([JH][0-9OQIL][A-Z0-9]{2}[0-9OQILS])\s+(?=[0-9OQILS][A-Z0-9])/g,'$1'));
     const candidates=candidateText.flatMap(text=>text.match(/[JH][A-Z0-9]{6}(?![A-Z0-9])/g)||[]);
     const valid=value=>/^[A-Z][0-9OQIL][A-Z0-9]{2}[0-9OQILS]{2}[A-Z0-9OQILS]$/.test(value);
@@ -96,8 +100,9 @@
     if(value.length!==7 || !valid(value))return {value:'',review:true};
     const normalized=normalize(value);
     const rawFallback=!!parts.idRaw&&!candidateText.slice(0,-1).some(text=>text.includes(value));
+    const repaired=!upper(parts.idLine).includes(value) && candidateText[0].includes(value);
     const conflict=candidates.some(x=>valid(x)&&normalize(x)!==normalized);
-    return {value:normalized,review:normalized!==value||rawFallback||conflict};
+    return {value:normalized,review:normalized!==value||rawFallback||repaired||conflict};
   }
   function colour(text, alternate) {
     const lines=upper(text).split(/\n/).map(s=>s.trim()).filter(Boolean);
@@ -116,10 +121,14 @@
       .replace(/[|\\;.,/\s]+$/,'').replace(/\s+/g,' ').trim();
     const codeLine=codeLines.find(line=>/\b(?:COL(?:OU)?R\s*TOP|COLOR\s*TOP)\b/.test(line))||'';
     const codePattern=/\b(?:PW|PC|PS|KT|JW|IW)(?:[0-9OQ]{3}|[0-9OQ]{2}[A-Z])\b/g;
-    const colourCodes=[upper(alternate?.colourCodeLine),...codeLines,upper(alternate?.colourCodeTight),upper(alternate?.fullText)].flatMap(line=>
+    const tightCode=(upper(alternate?.colourCodeTight).match(codePattern)||[])[0];
+    const bodyCodes=codeLines.flatMap(line=>line.match(codePattern)||[]);
+    const colourCodes=[upper(alternate?.colourCodeLine),upper(alternate?.fullText)].flatMap(line=>
       line.match(codePattern)||[]);
     const codeRaw=(codeLine.match(codePattern)||[])[0]||
-      colourCodes.find(x=>/\d{3}$/.test(x))||colourCodes[0]||'';
+      bodyCodes.find(x=>/\d{3}$/.test(x))||
+      (/\d{3}$/.test(tightCode||'')&&tightCode)||colourCodes.find(x=>/\d{3}$/.test(x))||
+      bodyCodes[0]||tightCode||colourCodes[0]||'';
     const code=codeRaw.slice(0,2)+codeRaw.slice(2).replace(/[OQ]/g,'0');
     const incomplete=name.includes('(') && !name.includes(')');
     if(incomplete&&code){
@@ -224,6 +233,19 @@
       const candidates=printed.filter(value=>Math.abs(Number(value)-Number(out[imperial])*factor)<=limit);
       if(candidates.length===1){out[field]=candidates[0];out.review.push(field);}
     }
+    // The tiny metric type often loses its final zero under a shadow. Restore
+    // it only when a printed three-digit prefix and the independently read
+    // pound value uniquely agree; a conversion alone is never a reading.
+    for(const [field,imperial,sources] of [
+      ['netKg','netLb',[parts.net,parts.netAlt,parts.netWide,parts.netMetricTight,parts.netMetricLower]],
+      ['grossKg','grossLb',[parts.gross,parts.grossAlt,parts.grossWide,parts.grossMetricTight,parts.grossMetricLower]]
+    ])if(out[imperial]&&!out[field]){
+      const fragments=sources.flatMap(text=>[...upper(text).matchAll(/\b([2-9])\s*,\s*(\d{2})\s*K[G6E]\b/g)]
+        .map(match=>match[1]+match[2]+'0'));
+      const candidates=[...new Set(fragments)].filter(value=>
+        Math.abs(Number(value)-Number(out[imperial])*.45359237)<=6);
+      if(candidates.length===1){out[field]=candidates[0];out.review.push(field);}
+    }
     const oneDigitRepair=(printed,target,factor)=>{
       const candidates=new Set();
       for(let i=0;i<printed.length;i++)for(const digit of '0123456789'){
@@ -280,12 +302,32 @@
     }
     return [...fields];
   }
-  function mergeSnapshots(primary,secondary) {
+  function mergeSnapshots(primary,secondary,primaryParts) {
     const result={...primary,review:[...new Set(primary.review||[])]},used=[],conflicts=[];
     // The second frame must belong to the same coil. An independent printed
     // identifier conflict is a reason to ignore it, not to mix stock records.
     if(['partNo','coilId'].some(field=>primary[field]&&secondary[field]&&primary[field]!==secondary[field]))
       return {values:result,used,conflicts:['identity'],identityMismatch:true};
+    // A complete, agreeing lb/kg reading from the other frame can resolve a
+    // lone bad OCR digit in the first. Keep conflicting complete pairs for
+    // manual review instead of choosing one on sharpness alone.
+    for(const [lb,kg,factor,limit] of [
+      ['netLb','netKg',.45359237,6],['grossLb','grossKg',.45359237,6],
+      ['lengthFt','lengthM',.3048,2]
+    ]){
+      if(!secondary[lb]||!secondary[kg]||!primary[lb]||primary[lb]===secondary[lb])continue;
+      if(Math.abs(Number(secondary[lb])*factor-Number(secondary[kg]))>limit)continue;
+      if(primary[kg]&&Math.abs(Number(primary[lb])*factor-Number(primary[kg]))<=limit)continue;
+      if(lb==='netLb'&&result.grossLb&&Number(secondary[lb])>Number(result.grossLb) ||
+        lb==='grossLb'&&result.netLb&&Number(secondary[lb])<Number(result.netLb))continue;
+      for(const field of [lb,kg]){
+        if(result[field]!==secondary[field]){
+          result[field]=secondary[field];used.push(field);
+        }
+        result.review.push(field);
+      }
+      conflicts.push(lb);
+    }
     const consistent=(field,value)=>{
       const pairs={netLb:['netKg',.45359237,true],netKg:['netLb',.45359237,false],
         grossLb:['grossKg',.45359237,true],grossKg:['grossLb',.45359237,false],
@@ -305,9 +347,27 @@
       if(!result[field]){
         if(consistent(field,value)){result[field]=value;result.review.push(field);used.push(field);}
         else conflicts.push(field);
-      }else if(result[field]!==value){
+      }else if(result[field]!==value && !(field==='colour'&&
+        result[field].replace(/\s*\(/g,' (')===value.replace(/\s*\(/g,' ('))){
         result.review.push(field);conflicts.push(field);
       }
+    }
+    // If both photos independently read the same pounds, a single damaged
+    // digit in an explicitly printed kg value can be repaired. Require the
+    // printed four-digit reading, a one-digit change, and 10 kg label units.
+    for(const [lb,kg,sources] of [
+      ['netLb','netKg',[primaryParts?.net,primaryParts?.netAlt,primaryParts?.metricBand]],
+      ['grossLb','grossKg',[primaryParts?.gross,primaryParts?.grossAlt,primaryParts?.metricBand]]
+    ])if(!result[kg]&&primary[lb]&&primary[lb]===secondary[lb]){
+      const expected=Number(primary[lb])*.45359237;
+      const candidate=String(Math.round(expected/10)*10);
+      if(candidate.length!==4||Math.abs(Number(candidate)-expected)>2)continue;
+      const printed=sources.flatMap(source=>[...upper(source).matchAll(/\b([2-9])\s*,\s*(\d{3})\s*K[G6E]\b/g)]
+        .map(match=>match[1]+match[2]));
+      if(!printed.some(value=>Math.abs(Number(value)-expected)>6&&
+        Math.abs(Number(value)-expected)<20&&
+        [...value].filter((digit,i)=>digit!==candidate[i]).length===1))continue;
+      result[kg]=candidate;result.review.push(kg);used.push(kg);conflicts.push(kg);
     }
     result.review=[...new Set(result.review)];
     return {values:result,used,conflicts:[...new Set(conflicts)],identityMismatch:false};

@@ -186,6 +186,16 @@
       regions.metricBand=[.06,.61,.52,.07];parts.metricBand=await recognizeEnlarged(ocr,straight,regions.metricBand);
       values=CoilParser.parse(parts);
     }
+    // The small kg line can be lost when OCR sees the bold pounds and barcode
+    // in the same crop. Revisit only missing kg values on the other frame.
+    for(const [field,key,rect] of [
+      ['netKg','netMetricTight',[.05,.605,.17,.05]],
+      ['grossKg','grossMetricTight',[.25,.605,.15,.05]]
+    ])if(need.has(field)&&!values[field]){
+      await ocr.setParameters({tessedit_pageseg_mode:'7',tessedit_char_whitelist:''});
+      regions[key]=rect;parts[key]=await recognizeEnlarged(ocr,straight,rect);
+      values=CoilParser.parse(parts);
+    }
     return {regions,parts,values,found:{corners:found.corners,coverage:found.coverage}};
   }
   async function runScan(){
@@ -296,7 +306,7 @@
         parts.idWide=await recognizeEnlarged(ocr,straight,regions.idWide);
         values=CoilParser.parse(parts);
       }
-      for(const [field,region] of [['netKg',[.055,.612,.13,.055]],['grossKg',[.28,.612,.13,.055]]])if(!values[field]){
+      for(const [field,region] of [['netKg',[.05,.605,.17,.05]],['grossKg',[.25,.605,.15,.05]]])if(!values[field]){
         await ocr.setParameters({tessedit_pageseg_mode:'7',tessedit_char_whitelist:''});
         const key=field==='netKg'?'netMetricTight':'grossMetricTight';
         regions[key]=region;parts[key]=await recognizeEnlarged(ocr,straight,region);
@@ -349,7 +359,7 @@
         progressTo('Checking uncertain fields in the other photo...',86);report.stage='second-photo';
         try{
           const second=await readSecondPhoto(ocr,alternatePhoto,found,chosen,needed);
-          const merged=CoilParser.mergeSnapshots(values,second.values);
+          const merged=CoilParser.mergeSnapshots(values,second.values,parts);
           values=merged.values;secondaryParts=second.parts;
           report.secondary={needed,regions:second.regions,parts:second.parts,parsed:second.values,
             used:merged.used,conflicts:merged.conflicts,identityMismatch:merged.identityMismatch,
