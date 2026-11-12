@@ -193,7 +193,7 @@
     if(coverage<.10||coverage>found.coverage*1.45||coverage<found.coverage*.65)return found;
     return {...found,corners,coverage,shadowBorderRefined:true};
   }
-  function sameLiveLabel(a,b) {
+  function sameLiveLabel(a,b,minOverlap=.60) {
     if(!a||!b)return false;
     const bounds=found=>({left:Math.min(...found.corners.map(p=>p.x)),right:Math.max(...found.corners.map(p=>p.x)),
       top:Math.min(...found.corners.map(p=>p.y)),bottom:Math.max(...found.corners.map(p=>p.y))});
@@ -201,7 +201,7 @@
     const areaX=(x.right-x.left)*(x.bottom-x.top),areaY=(y.right-y.left)*(y.bottom-y.top);
     const intersection=Math.max(0,Math.min(x.right,y.right)-Math.max(x.left,y.left))*
       Math.max(0,Math.min(x.bottom,y.bottom)-Math.max(x.top,y.top));
-    return areaX>0&&areaY>0&&intersection/(areaX+areaY-intersection)>.60;
+    return areaX>0&&areaY>0&&intersection/(areaX+areaY-intersection)>minOverlap;
   }
   function cornerMotion(a,b) {
     if(!a||!b)return Infinity;
@@ -210,6 +210,14 @@
     // The detector can choose a different first corner on consecutive frames.
     return Math.min(...[0,1,2,3].map(shift=>
       b.corners.reduce((sum,p,i)=>sum+distance(p,a.corners[(i+shift)%4]),0)/4))/size;
+  }
+  function alignCorners(reference,candidate) {
+    if(!reference||!candidate)return candidate;
+    const points=candidate.corners;
+    const shifts=[0,1,2,3].map(shift=>({shift,error:points.reduce((sum,_,i)=>
+      sum+distance(points[(i+shift)%4],reference.corners[i]),0)}));
+    const shift=shifts.reduce((best,next)=>next.error<best.error?next:best).shift;
+    return {...candidate,corners:points.map((_,i)=>points[(i+shift)%4])};
   }
   function labelDetail(image,found) {
     if(!found)return {detail:0,glare:1};
@@ -338,5 +346,5 @@
   function orientationScore(text) {
     const t=text.toUpperCase();return (t.match(/COIL|COATED|STEEL|PART|CSM|CLR|ASTM|VANCOUVER|KOREA|LBS|UNION|NET|GROSS|WEIGHT/g)||[]).length;
   }
-  return {FIELD_IDS,blueMask,detectLabel,labelReady,refineBorderCorners,refineShadowBoundary,sameLiveLabel,cornerMotion,labelDetail,advanceLiveCapture,advanceReachCapture,reachCaptureReady,reconcileCaptureCorners,warp,rotate,enhance,crop,orientationScore};
+  return {FIELD_IDS,blueMask,detectLabel,labelReady,refineBorderCorners,refineShadowBoundary,sameLiveLabel,cornerMotion,alignCorners,labelDetail,advanceLiveCapture,advanceReachCapture,reachCaptureReady,reconcileCaptureCorners,warp,rotate,enhance,crop,orientationScore};
 });

@@ -269,5 +269,48 @@
     out.review=[...new Set(out.review)];
     return out;
   }
-  return {parse};
+  function retryFields(values) {
+    const fields=new Set(FIELDS.filter(field=>!values[field]||values.review?.includes(field)));
+    for(const [a,b,factor] of [['netLb','netKg',.45359237],['grossLb','grossKg',.45359237],['lengthFt','lengthM',.3048]])
+      if(values[a]&&values[b]&&Math.abs(Number(values[a])*factor-Number(values[b]))>Math.max(2,Number(values[b])*.015)){
+        fields.add(a);fields.add(b);
+      }
+    if(values.netLb&&values.grossLb&&Number(values.netLb)>Number(values.grossLb)){
+      fields.add('netLb');fields.add('grossLb');
+    }
+    return [...fields];
+  }
+  function mergeSnapshots(primary,secondary) {
+    const result={...primary,review:[...new Set(primary.review||[])]},used=[],conflicts=[];
+    // The second frame must belong to the same coil. An independent printed
+    // identifier conflict is a reason to ignore it, not to mix stock records.
+    if(['partNo','coilId'].some(field=>primary[field]&&secondary[field]&&primary[field]!==secondary[field]))
+      return {values:result,used,conflicts:['identity'],identityMismatch:true};
+    const consistent=(field,value)=>{
+      const pairs={netLb:['netKg',.45359237,true],netKg:['netLb',.45359237,false],
+        grossLb:['grossKg',.45359237,true],grossKg:['grossLb',.45359237,false],
+        lengthFt:['lengthM',.3048,true],lengthM:['lengthFt',.3048,false]};
+      const pair=pairs[field];
+      if(pair&&result[pair[0]]){
+        const expected=pair[2]?Number(value)*pair[1]:Number(result[pair[0]])*pair[1];
+        const metric=pair[2]?Number(result[pair[0]]):Number(value);
+        if(Math.abs(expected-metric)>Math.max(2,metric*.015))return false;
+      }
+      if(field==='grossLb'&&result.netLb&&Number(value)<Number(result.netLb) ||
+        field==='netLb'&&result.grossLb&&Number(value)>Number(result.grossLb))return false;
+      return true;
+    };
+    for(const field of FIELDS){
+      const value=secondary[field];if(!value)continue;
+      if(!result[field]){
+        if(consistent(field,value)){result[field]=value;result.review.push(field);used.push(field);}
+        else conflicts.push(field);
+      }else if(result[field]!==value){
+        result.review.push(field);conflicts.push(field);
+      }
+    }
+    result.review=[...new Set(result.review)];
+    return {values:result,used,conflicts:[...new Set(conflicts)],identityMismatch:false};
+  }
+  return {parse,retryFields,mergeSnapshots};
 });

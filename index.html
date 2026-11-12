@@ -22,10 +22,10 @@
         That means this test needs an internet connection.
     -->
     <script defer src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
-    <script defer src="scanner-core.js?v=14"></script>
-    <script defer src="scanner-parser.js?v=8"></script>
+    <script defer src="scanner-core.js?v=15"></script>
+    <script defer src="scanner-parser.js?v=9"></script>
     <script defer src="diagnostics.js?v=3"></script>
-    <script defer src="scanner.js?v=18"></script>
+    <script defer src="scanner.js?v=19"></script>
 
     <style>
         * {
@@ -346,7 +346,8 @@
         #resultsCard {
             display: none;
         }
-        #straightenedPreview {
+        #straightenedPreview,
+        #secondPreview {
             width: 100%;
             border-radius: 12px;
             margin-top: 12px;
@@ -511,6 +512,10 @@
         </div>
         <p class="subtitle" id="reviewNote">Review each reading against the label below. Yellow fields need particular attention.</p>
         <img id="straightenedPreview" alt="Straightened label for checking the results">
+        <details id="secondPreviewDetails" hidden>
+            <summary>View other snapshot</summary>
+            <img id="secondPreview" alt="Other straightened label for checking the results">
+        </details>
 
         <div class="grid">
 

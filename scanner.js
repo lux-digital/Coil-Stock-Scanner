@@ -7,12 +7,13 @@
   const input = $('imageInput'), preview = $('preview'), scan = $('scanButton'), results = $('resultsCard');
   const progress = $('progressArea'), bar = $('progressBar'), status = $('progressText');
   const fullCanvas = document.createElement('canvas'), smallCanvas = document.createElement('canvas');
-  let image = null, url = null, worker = null, stream = null, cameraTimer = null, captureTimer = null, scanning = false;
-  let lastLiveImage=null, lastLiveFound=null, capturedLive=null;
+  let image = null, url = null, worker = null, stream = null, cameraTimer = null, captureTimer = null, scanning = false, pairing = false;
+  let lastLiveImage=null, lastLiveFound=null, capturedLive=null, alternatePhoto=null;
   let report={startedAt:new Date().toISOString(),source:'none',events:[],images:{},stage:'ready'};
   function event(name,details={}) {report.events.push({at:new Date().toISOString(),name,...details});if(report.events.length>240)report.events.shift();}
   function showReportButton(){ $('saveLiveReport').hidden=false;$('reportHint').hidden=false; }
-  function resetReport(source){capturedLive=null;report={startedAt:new Date().toISOString(),source,events:[],images:{},stage:'ready'};showReportButton();event('new-test');}
+  function resetReport(source){capturedLive=null;alternatePhoto=null;$('secondPreviewDetails').hidden=true;$('secondPreview').removeAttribute('src');
+    report={startedAt:new Date().toISOString(),source,events:[],images:{},stage:'ready'};showReportButton();event('new-test');}
   function frameImage(frame,found,caption='Detection preview') {
     const c=toCanvas(frame),x=c.getContext('2d');
     if(found){const corners=found.corners;x.lineWidth=5;x.lineJoin='round';x.strokeStyle='#ffcc32';x.beginPath();x.moveTo(corners[0].x,corners[0].y);
@@ -31,10 +32,11 @@
       if(lastLiveImage){report.images['camera-boundary.jpg']=frameImage(lastLiveImage,lastLiveFound,report.stage);
         report.images['blue-pixel-mask.png']=maskImage(lastLiveImage,lastLiveFound);}
       if(image&&!report.images['original-frame.jpg'])report.images['original-frame.jpg']=toCanvas(imageData(image,2400)).toDataURL('image/jpeg',.86);
-      const metadata={version:'3',exportedAt:new Date().toISOString(),source:report.source,startedAt:report.startedAt,stage:report.stage,
+      const metadata={version:'4',exportedAt:new Date().toISOString(),source:report.source,startedAt:report.startedAt,stage:report.stage,
         browser:navigator.userAgent,screen:{width:screen.width,height:screen.height,devicePixelRatio:devicePixelRatio},
         viewport:{width:innerWidth,height:innerHeight},
-        camera:report.camera||null,capture:report.capture||null,events:report.events,detection:report.detection||null,
+        camera:report.camera||null,capture:report.capture||null,secondary:report.secondary||null,
+        events:report.events,detection:report.detection||null,
         orientation:report.orientation||null,ocr:report.ocr||null,parsed:report.parsed||null,error:report.error||null,
         displayedFields:Object.fromEntries(core.FIELD_IDS.map(id=>[id,$(id).value]))};
       const files=[['README.txt','Coil Scanner test report. Attach this ZIP to the chat. Photos and OCR results stayed on the device until you downloaded this file.\n'],
@@ -88,6 +90,10 @@
   function check(data) {
     const messages=[],bad=new Set(),confirmed=new Set(),numeric=id=>Number(data[id]);
     if(report.capture?.mode==='automatic-reach')messages.push('Overhead photo used the best available frame. Check every reading against the image.');
+    if(report.secondary?.identityMismatch)messages.push('The two photos may show different labels. Only the first was used.');
+    else if(report.secondary?.conflicts?.length)for(const field of report.secondary.conflicts){
+      bad.add(field);messages.push('Two photos disagree on '+$(field).previousElementSibling.textContent.toLowerCase()+'.');
+    }
     for(const id of data.review||[]){bad.add(id);messages.push('Check '+$(id).previousElementSibling.textContent.toLowerCase()+' against the label.');}
     for(const [a,b,f,name] of [['netLb','netKg',.45359237,'Net weight'],['grossLb','grossKg',.45359237,'Gross weight'],['lengthFt','lengthM',.3048,'Length']]) {
       if(!data[a]||!data[b]){bad.add(a);bad.add(b);continue;}
@@ -113,8 +119,10 @@
   results.querySelectorAll('input').forEach(el=>el.addEventListener('input',()=>{
     const values=Object.fromEntries(core.FIELD_IDS.map(id=>[id,$(id).value.trim()]));check(values);
   }));
-  async function recognizeRegion(ocr,canvas,rect) {
-    await ocr.setParameters({tessedit_pageseg_mode:'6',user_defined_dpi:'300'});
+  async function recognizeRegion(ocr,canvas,rect,mode='6',whitelist=null) {
+    const parameters={tessedit_pageseg_mode:mode,user_defined_dpi:'300'};
+    if(whitelist!==null)parameters.tessedit_char_whitelist=whitelist;
+    await ocr.setParameters(parameters);
     return (await ocr.recognize(canvas,{rectangle:{left:Math.round(rect[0]*canvas.width),top:Math.round(rect[1]*canvas.height),width:Math.round(rect[2]*canvas.width),height:Math.round(rect[3]*canvas.height)}})).data.text;
   }
   async function recognizeEnlarged(ocr,canvas,rect,scale=3) {
@@ -124,15 +132,73 @@
       rect[2]*canvas.width,rect[3]*canvas.height,0,0,crop.width,crop.height);
     return (await ocr.recognize(crop)).data.text;
   }
+  async function readSecondPhoto(ocr,shot,reference,chosen,needed) {
+    const photo=new Image();
+    await new Promise((resolve,reject)=>{photo.onload=resolve;photo.onerror=()=>reject(new Error('Second photo could not be opened.'));photo.src=shot.dataURL;});
+    const small=imageData(photo,640),detected=findLabel(small);
+    const adjusted=detected?.shadowBorderRefined?{found:detected}:
+      core.reconcileCaptureCorners(detected,shot.live?.found,small.width,small.height,shot.live?.width,shot.live?.height);
+    let boundary=adjusted.found;
+    if(!core.labelReady(boundary,small.width,small.height)&&
+      core.labelReady(shot.live?.found,shot.live?.width,shot.live?.height))
+      boundary={...shot.live.found,corners:shot.live.found.corners.map(p=>({
+        x:p.x*small.width/shot.live.width,y:p.y*small.height/shot.live.height}))};
+    if(!core.labelReady(boundary,small.width,small.height))throw new Error('Second photo has no complete label.');
+    const found=core.alignCorners(reference,boundary),full=imageData(photo,2400);
+    const corners=found.corners.map(p=>({x:p.x*full.width/small.width,y:p.y*full.height/small.height}));
+    let label=core.warp(full,corners);if(chosen)label=core.rotate(label,2);
+    const straight=toCanvas(label),enhanced=toCanvas(core.enhance(label));
+    const straightURL=straight.toDataURL('image/jpeg',.86);
+    report.images['alternate-straightened-label.jpg']=straightURL;
+    $('secondPreview').src=straightURL;$('secondPreviewDetails').hidden=false;
+    const regions={},parts={},need=new Set(needed);
+    const read=async(key,canvas,rect,psm='6',whitelist='')=>{
+      regions[key]=rect;parts[key]=await recognizeRegion(ocr,canvas,rect,psm,whitelist);
+    };
+    // Two small identity crops guard against combining adjacent coils.
+    await read('left',enhanced,[.025,.14,.44,.25]);
+    await read('idLine',straight,[.37,.615,.30,.125],'8','ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789');
+    if(need.has('partNo')){
+      await ocr.setParameters({tessedit_pageseg_mode:'8',tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'});
+      regions.partUpper=[.045,.215,.23,.09];parts.partUpper=await recognizeEnlarged(ocr,straight,regions.partUpper);
+    }
+    if(need.has('coilId')){
+      await ocr.setParameters({tessedit_pageseg_mode:'7',tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'});
+      regions.barcodeLine=[.31,.845,.27,.045];parts.barcodeLine=await recognizeEnlarged(ocr,straight,regions.barcodeLine);
+    }
+    if(need.has('colour')){
+      await read('right',enhanced,[.57,.37,.40,.35]);
+      await read('rightAlt',straight,[.57,.37,.40,.35]);
+      await ocr.setParameters({tessedit_pageseg_mode:'8',tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'});
+      regions.colourCodeLine=[.675,.59,.115,.065];parts.colourCodeLine=await recognizeEnlarged(ocr,straight,regions.colourCodeLine);
+    }
+    for(const [key,fields,rect] of [
+      ['net',['netLb','netKg'],[.04,.53,.20,.14]],
+      ['gross',['grossLb','grossKg'],[.22,.53,.22,.14]],
+      ['length',['lengthFt','lengthM'],[.42,.53,.20,.14]]
+    ])if(fields.some(field=>need.has(field))){
+      await read(key,enhanced,rect);await read(key+'Alt',straight,rect);
+    }
+    let values=CoilParser.parse(parts);
+    if([...need].some(field=>!values[field]&&['netLb','netKg','grossLb','grossKg','lengthFt','lengthM'].includes(field))){
+      await read('weightBand',straight,[.015,.52,.68,.23]);
+      await ocr.setParameters({tessedit_pageseg_mode:'11',tessedit_char_whitelist:''});
+      regions.metricBand=[.06,.61,.52,.07];parts.metricBand=await recognizeEnlarged(ocr,straight,regions.metricBand);
+      values=CoilParser.parse(parts);
+    }
+    return {regions,parts,values,found:{corners:found.corners,coverage:found.coverage}};
+  }
   async function runScan(){
     if(!image||scanning)return;scanning=true;scan.disabled=true;progress.style.display='block';results.style.display='none';progressTo('Finding the blue label...',8);
     report.stage='detecting';event('scan-start',{imageWidth:image.naturalWidth,imageHeight:image.naturalHeight});
     try {
       if(typeof Tesseract==='undefined')throw new Error('OCR library did not load. Check the internet connection.');
+      let found,chosen,values,parts,regions,ocr;
+      { // Release the large primary image buffers before opening the second photo.
       const small=imageData(image,640),rawDetection=core.detectLabel(small),detected=core.refineShadowBoundary(small,core.refineBorderCorners(small,rawDetection));
       const adjusted=detected?.shadowBorderRefined?{found:detected,corrected:[]}:
         core.reconcileCaptureCorners(detected,capturedLive?.found,small.width,small.height,capturedLive?.width,capturedLive?.height);
-      const found=adjusted.found;
+      found=adjusted.found;
       report.detection={imageWidth:small.width,imageHeight:small.height,corners:found?.corners||null,
         originalCorners:rawDetection?.corners||null,borderRefined:!!detected?.borderRefined,
         shadowBorderRefined:!!detected?.shadowBorderRefined,correctedCorners:adjusted.corrected,
@@ -143,13 +209,13 @@
       report.images['scan-boundary.jpg']=frameImage(small,found,'Boundary used for OCR');
       if(!found)throw new Error('The blue label could not be found. Move closer, keep the entire label visible, and try again.');
       const full=imageData(image,2400),corners=found.corners.map(p=>({x:p.x*full.width/small.width,y:p.y*full.height/small.height}));
-      let label=core.warp(full,corners),ocr=await getWorker();progressTo('Checking label orientation...',25);report.stage='orientation';
+      let label=core.warp(full,corners);ocr=await getWorker();progressTo('Checking label orientation...',25);report.stage='orientation';
       // The blue border establishes the horizontal axis; OCR establishes which end is the top.
       await ocr.setParameters({tessedit_pageseg_mode:'6',user_defined_dpi:'300',tessedit_char_whitelist:''});
       const quick=toCanvas(label),half=toCanvas(core.rotate(label,2));
       const first=(await ocr.recognize(quick)).data.text;
       const second=(await ocr.recognize(half)).data.text;
-      const chosen=core.orientationScore(second)>core.orientationScore(first)?180:0;
+      chosen=core.orientationScore(second)>core.orientationScore(first)?180:0;
       report.orientation={score0:core.orientationScore(first),score180:core.orientationScore(second),chosenDegrees:chosen,text0:first,text180:second};
       if(chosen)label=core.rotate(label,2);
       const straight=toCanvas(label),enhanced=toCanvas(core.enhance(label));
@@ -157,13 +223,13 @@
       report.images['enhanced-for-ocr.jpg']=enhanced.toDataURL('image/jpeg',.86);
       $('straightenedPreview').src=straight.toDataURL('image/jpeg',.86);
       progressTo('Reading printed fields...',55);
-      const regions={
+      regions={
         left:[.025,.14,.44,.25],right:[.57,.37,.40,.35],
         net:[.04,.53,.20,.14],gross:[.22,.53,.22,.14],
         length:[.42,.53,.20,.14],id:[.33,.62,.33,.16],
         idTight:[.405,.612,.23,.098]
       };
-      const parts={fullText:chosen?second:first};for(const [key,rect] of Object.entries(regions)){
+      parts={fullText:chosen?second:first};for(const [key,rect] of Object.entries(regions)){
         if(key!=='idTight')parts[key]=await recognizeRegion(ocr,enhanced,rect);
       }
       // The original colour and kilogram print is sometimes sharper than the contrast-enhanced copy.
@@ -189,7 +255,7 @@
       await ocr.setParameters({tessedit_pageseg_mode:'8'});
       parts.colourCodeTight=await recognizeEnlarged(ocr,straight,[.675,.595,.095,.07]);
       await ocr.setParameters({tessedit_char_whitelist:''});
-      let values=CoilParser.parse(parts);
+      values=CoilParser.parse(parts);
       const missingNumbers=()=>['netLb','netKg','grossLb','grossKg','lengthFt','lengthM']
         .some(key=>!values[key])||(values.netLb&&values.grossLb&&Number(values.grossLb)<Number(values.netLb));
       if(missingNumbers()){
@@ -276,8 +342,25 @@
         parts.metricBand=await recognizeEnlarged(ocr,straight,regions.metricBand);
         values=CoilParser.parse(parts);
       }
+      }
+      let secondaryParts=null;
+      const needed=CoilParser.retryFields(values);
+      if(alternatePhoto&&needed.length){
+        progressTo('Checking uncertain fields in the other photo...',86);report.stage='second-photo';
+        try{
+          const second=await readSecondPhoto(ocr,alternatePhoto,found,chosen,needed);
+          const merged=CoilParser.mergeSnapshots(values,second.values);
+          values=merged.values;secondaryParts=second.parts;
+          report.secondary={needed,regions:second.regions,parts:second.parts,parsed:second.values,
+            used:merged.used,conflicts:merged.conflicts,identityMismatch:merged.identityMismatch,
+            corners:second.found.corners};
+          event('second-photo-read',{used:merged.used,conflicts:merged.conflicts,identityMismatch:merged.identityMismatch});
+        }catch(error){report.secondary={needed,error:error.message};event('second-photo-failed',{message:error.message});}
+      }else if(alternatePhoto)report.secondary={needed:[],used:[],skipped:'First photo had no missing or uncertain fields.'};
+      alternatePhoto=null;
       report.ocr={regions,parts};report.parsed=values;report.stage='complete';event('scan-complete');
-      $('rawText').textContent=Object.entries(parts).map(([name,value])=>name.toUpperCase()+':\n'+value).join('\n');
+      $('rawText').textContent=Object.entries(parts).map(([name,value])=>name.toUpperCase()+':\n'+value).join('\n')+
+        (secondaryParts?'\n\nOTHER PHOTO:\n'+Object.entries(secondaryParts).map(([name,value])=>name.toUpperCase()+':\n'+value).join('\n'):'');
       check(values);results.style.display='block';progressTo('Scan complete. Please check the fields against the image.',100);
       results.scrollIntoView({behavior:'smooth',block:'start'});
     }catch(error){console.error(error);report.error={message:error.message,stack:error.stack};report.stage='failed';event('scan-failed',{message:error.message});progressTo(error.message||'Could not scan this photo.',0);}
@@ -339,10 +422,36 @@
     const track=stream?.getVideoTracks()[0];
     if(track&&torchAvailable&&!torchBusy)setTorch(track,!torchActive);
   });
+  function finishCapture(reason,primary,secondary,quality,showCheckFor){
+    const {dataURL,frame,found}=primary;
+    capturedLive=primary.live;
+    alternatePhoto=secondary?{dataURL:secondary.dataURL,live:secondary.live}:null;
+    report.images['original-frame.jpg']=dataURL;
+    if(secondary)report.images['alternate-frame.jpg']=secondary.dataURL;
+    report.capture={mode:reason,quality,shots:secondary?2:1,primaryQuality:primary.actualQuality,
+      alternateQuality:secondary?.actualQuality||null,primaryShot:primary.shotNumber,
+      alternateShot:secondary?.shotNumber||null};
+    event('camera-capture',{reason,corners:found?.corners||null,torchActive,quality,shots:secondary?2:1,
+      primaryQuality:primary.actualQuality,alternateQuality:secondary?.actualQuality||null,
+      primaryShot:primary.shotNumber,
+      soundState:soundContext?.state||'unavailable'});
+    captureCue(); // The final chime means both snapshots (when available) are saved.
+    cameraStatus.textContent=secondary?'✓ Two photos saved. You can lower the phone.':
+      '✓ Photo saved. You can lower the phone.';
+    if(showCheckFor){
+      const displayed=primary.shotNumber===2?primary:secondary?.shotNumber===2?secondary:primary;
+      drawLiveOutline(displayed.found,displayed.frame,true);
+      video.pause();
+    }
+    const finish=()=>{captureTimer=null;
+      report.images['camera-boundary.jpg']=frameImage(frame,found,'Captured '+reason);
+      report.images['blue-pixel-mask.png']=maskImage(frame,found);
+      stopCamera();image=new Image();image.onload=()=>{preview.src=dataURL;$('previewWrapper').style.display='block';runScan();};image.src=dataURL;};
+    if(showCheckFor)captureTimer=setTimeout(finish,showCheckFor);else finish();
+  }
   function captureFrame(reason, showCheckFor=0,quality=null,saved=null){
-    if(!stream||!video.videoWidth||scanning)return false;
+    if(!stream||!video.videoWidth||scanning||pairing)return false;
     const frame=saved?.frame||lastLiveImage||imageData(video,640),found=saved?.found||lastLiveFound||findLabel(frame);
-    capturedLive=found?{found,width:frame.width,height:frame.height}:null;
     const capture=saved?.canvas||document.createElement('canvas');
     if(!saved){capture.width=video.videoWidth;capture.height=video.videoHeight;capture.getContext('2d').drawImage(video,0,0);}
     if(reason==='automatic'&&found){
@@ -360,16 +469,35 @@
       if(!saved||saved.quality.detail<15||saved.quality.glare>=.025)return false;
       quality={...quality,previewQuality:saved.previewQuality,actualQuality:saved.quality};
     }
-    const dataURL=capture.toDataURL('image/jpeg',.9);report.images['original-frame.jpg']=dataURL;
-    report.capture={mode:reason,quality};
-    event('camera-capture',{reason,corners:found?.corners||null,torchActive,quality,soundState:soundContext?.state||'unavailable'});
-    captureCue(); // The chime follows a successfully saved frame, never a tentative green outline.
-    if(showCheckFor)video.pause(); // Keep the green outline on the frame that was captured.
-    const finish=()=>{captureTimer=null;
-      report.images['camera-boundary.jpg']=frameImage(frame,found,'Captured '+reason);
-      report.images['blue-pixel-mask.png']=maskImage(frame,found);
-      stopCamera();image=new Image();image.onload=()=>{preview.src=dataURL;$('previewWrapper').style.display='block';runScan();};image.src=dataURL;};
-    if(showCheckFor)captureTimer=setTimeout(finish,showCheckFor);else finish();
+    const first={dataURL:capture.toDataURL('image/jpeg',.9),frame,found,shotNumber:1,
+      live:found?{found,width:frame.width,height:frame.height}:null,actualQuality:quality?.actualQuality||null};
+    report.images['original-frame.jpg']=first.dataURL;
+    if(reason==='manual'){finishCapture(reason,first,null,quality,showCheckFor);return true;}
+    pairing=true;event('camera-first-shot',{reason,quality:first.actualQuality});
+    const aimedAt=lastLiveFound||found,started=performance.now();
+    const trySecond=()=>{
+      captureTimer=null;
+      if(!stream||!video.videoWidth)return;
+      try{
+        const secondFrame=imageData(video,480),secondFound=findLabel(secondFrame);
+        if(core.labelReady(secondFound,secondFrame.width,secondFrame.height)&&core.sameLiveLabel(aimedAt,secondFound,.25)){
+          const canvas=document.createElement('canvas');canvas.width=video.videoWidth;canvas.height=video.videoHeight;
+          canvas.getContext('2d').drawImage(video,0,0);
+          const actual=imageData(canvas,960),scaled={corners:secondFound.corners.map(p=>({x:p.x*actual.width/secondFrame.width,y:p.y*actual.height/secondFrame.height}))};
+          const actualQuality=core.labelDetail(actual,scaled);
+          if(actualQuality.detail>=15&&actualQuality.glare<.025){
+            const next={dataURL:canvas.toDataURL('image/jpeg',.9),frame:secondFrame,found:secondFound,shotNumber:2,
+              live:{found:secondFound,width:secondFrame.width,height:secondFrame.height},actualQuality};
+            const better=first.actualQuality&&actualQuality.detail>first.actualQuality.detail+5;
+            event('camera-second-shot',{quality:actualQuality,primary:better?'second':'first'});
+            finishCapture(reason,better?next:first,better?first:next,quality,showCheckFor);return;
+          }
+        }
+      }catch(error){event('camera-second-shot-error',{message:error.message});}
+      if(performance.now()-started>=1250){event('camera-second-shot-unavailable');finishCapture(reason,first,null,quality,showCheckFor);}
+      else captureTimer=setTimeout(trySecond,200);
+    };
+    captureTimer=setTimeout(trySecond,500);
     return true;
   }
   $('captureNow').addEventListener('click',()=>{unlockCaptureSound();captureFrame('manual');});
@@ -378,7 +506,7 @@
     if(cameraTimer){clearInterval(cameraTimer);cameraTimer=null;}
     if(captureTimer){clearTimeout(captureTimer);captureTimer=null;}
     if(stream){stream.getTracks().forEach(track=>track.stop());stream=null;}
-    torchAvailable=false;torchActive=false;showTorchState();torchNotice('');
+    pairing=false;torchAvailable=false;torchActive=false;showTorchState();torchNotice('');
     video.srcObject=null;$('cameraPanel').hidden=true;$('startCamera').hidden=false;
   }
   $('stopCamera').addEventListener('click',()=>{event('camera-stopped');stopCamera();});
@@ -491,8 +619,8 @@
               {heldMs:Math.round(started-reach.firstSeen),visible:reach.visible,bestAtMs:Math.round(started-bestReach.at)};
             if(captureFrame(mode,500,metadata,ready?null:bestReach)){
               clearInterval(cameraTimer);cameraTimer=null;
-              cameraStatus.textContent=ready?'✓ Photo captured. You can lower the phone.':
-                '✓ Best available photo captured. You can lower the phone; review the readings.';
+              bestReach=null;
+              cameraStatus.textContent='First photo saved. Hold for the final chime.';
             }else stability={last:null,lastSeen:0,steady:0,stableSince:0};
           }
         }catch(error){console.error(error);report.error={message:error.message,stack:error.stack};report.stage='camera-error';event('camera-error',{message:error.message});stopCamera();cameraStatus.textContent='Camera preview stopped. Use the photo picker below.';}
