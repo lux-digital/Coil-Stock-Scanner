@@ -249,11 +249,41 @@
   }
   scan.addEventListener('click',runScan);
   const video=$('cameraVideo'),overlay=$('cameraOverlay'),cameraStatus=$('cameraStatus');
+  const torchButton=$('torchButton'),torchMessage=$('torchMessage');
+  let torchRequested=false,torchActive=false,torchAvailable=false,torchBusy=false;
+  function torchNotice(message){torchMessage.textContent=message;torchMessage.hidden=!message;}
+  function showTorchState(){
+    torchButton.textContent=torchActive?'FLASHLIGHT ON':'FLASHLIGHT OFF';
+    torchButton.setAttribute('aria-pressed',String(torchActive));
+    torchButton.disabled=!torchAvailable||torchBusy||!stream;
+  }
+  async function setTorch(track,on){
+    if(!track||!torchAvailable||torchBusy)return;
+    torchBusy=true;showTorchState();
+    try{
+      await track.applyConstraints({advanced:[{torch:on}]});
+      if(track!==stream?.getVideoTracks()[0]||track.readyState!=='live')return;
+      // Some iOS versions report the previous torch setting, so retain the
+      // requested state after a successful constraint application.
+      torchRequested=on;torchActive=on;
+      torchNotice(on?'Flashlight stays on while the camera is open.':'');
+      event('flashlight-changed',{on});
+    }catch(error){
+      if(track===stream?.getVideoTracks()[0]){
+        torchNotice('Could not switch the flashlight. Use your phone camera to take a lit photo, then select it below.');
+        event('flashlight-error',{name:error.name||'Error',message:error.message||''});
+      }
+    }finally{torchBusy=false;showTorchState();}
+  }
+  torchButton.addEventListener('click',()=>{
+    const track=stream?.getVideoTracks()[0];
+    if(track&&torchAvailable&&!torchBusy)setTorch(track,!torchActive);
+  });
   function captureFrame(reason, showCheckFor=0){
     if(!stream||!video.videoWidth||scanning)return;
     const frame=lastLiveImage||imageData(video,640),found=lastLiveFound||findLabel(frame);
     capturedLive=found?{found,width:frame.width,height:frame.height}:null;
-    event('camera-capture',{reason,corners:found?.corners||null});
+    event('camera-capture',{reason,corners:found?.corners||null,torchActive});
     const capture=document.createElement('canvas');capture.width=video.videoWidth;capture.height=video.videoHeight;
     capture.getContext('2d').drawImage(video,0,0);
     const dataURL=capture.toDataURL('image/jpeg',.9);report.images['original-frame.jpg']=dataURL;
@@ -269,6 +299,7 @@
     if(cameraTimer){clearInterval(cameraTimer);cameraTimer=null;}
     if(captureTimer){clearTimeout(captureTimer);captureTimer=null;}
     if(stream){stream.getTracks().forEach(track=>track.stop());stream=null;}
+    torchAvailable=false;torchActive=false;showTorchState();torchNotice('');
     video.srcObject=null;$('cameraPanel').hidden=true;$('startCamera').hidden=false;
   }
   $('stopCamera').addEventListener('click',()=>{event('camera-stopped');stopCamera();});
@@ -301,10 +332,17 @@
     try{
       stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
       video.srcObject=stream;await video.play();
-      const settings=stream.getVideoTracks()[0]?.getSettings()||{};
-      report.camera={width:video.videoWidth,height:video.videoHeight,frameRate:settings.frameRate||null,facingMode:settings.facingMode||null};
+      const track=stream.getVideoTracks()[0],settings=track?.getSettings()||{};
+      let torchCapability;
+      try{torchCapability=track?.getCapabilities?.().torch;}catch(error){console.debug('Flashlight capability unavailable',error);}
+      torchAvailable=!!track?.applyConstraints&&(torchCapability===true||Array.isArray(torchCapability)&&torchCapability.includes(true));
+      torchActive=false;showTorchState();
+      torchNotice(torchAvailable?'':'Flashlight unavailable in this browser or camera. Use your phone camera to take a lit photo, then select it below.');
+      report.camera={width:video.videoWidth,height:video.videoHeight,frameRate:settings.frameRate||null,
+        facingMode:settings.facingMode||null,torchAvailable};
       report.stage='camera-running';event('camera-started',report.camera);
       $('cameraPanel').hidden=false;$('startCamera').hidden=true;
+      if(torchRequested&&torchAvailable)await setTorch(track,true);
       lastLiveImage=null;lastLiveFound=null;
       drawLiveOutline(null,{width:1,height:1},false);
       let stability={last:null,lastSeen:0,steady:0},busy=false,lastFrameAt=0;
