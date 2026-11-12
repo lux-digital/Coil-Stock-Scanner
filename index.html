@@ -25,7 +25,7 @@
     <script defer src="scanner-core.js?v=11"></script>
     <script defer src="scanner-parser.js?v=6"></script>
     <script defer src="diagnostics.js?v=3"></script>
-    <script defer src="scanner.js?v=13"></script>
+    <script defer src="scanner.js?v=14"></script>
 
     <style>
         * {
@@ -149,6 +149,10 @@
         #cameraVideo { display: block; width: 100%; height: 100%; object-fit: contain; }
         #cameraOverlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
         #cameraStatus { margin: 10px 0 0; color: #555; font-size: 14px; }
+        #torchButton { position: absolute; top: 12px; right: 12px; z-index: 1; padding: 12px 16px;
+            background: rgba(16,24,32,.92); color: #fff; border: 2px solid #fff; font-size: 14px; }
+        #torchButton[aria-pressed="true"] { background: #f4ca35; border-color: #f4ca35; color: #111; }
+        #torchMessage { margin: 8px 0 0; color: #6e4600; font-size: 14px; }
 
         #preview {
             width: 100%;
@@ -419,8 +423,10 @@
             <div class="camera-frame">
                 <video id="cameraVideo" autoplay muted playsinline aria-label="Live camera view"></video>
                 <canvas id="cameraOverlay" aria-hidden="true"></canvas>
+                <button type="button" id="torchButton" aria-pressed="false" disabled>FLASHLIGHT OFF</button>
             </div>
             <p id="cameraStatus" role="status">Point the camera at the blue label.</p>
+            <p id="torchMessage" role="status" hidden></p>
             <div class="buttons">
                 <button class="primary" id="captureNow">CAPTURE NOW</button>
                 <button class="secondary" id="stopCamera">STOP CAMERA</button>
