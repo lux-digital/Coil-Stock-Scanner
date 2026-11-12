@@ -15,6 +15,13 @@
       .map(match => String(Number(match[0].replace(/\D/g,''))))
       .filter(value => Number(value)>=min && Number(value)<=max);
   }
+  function printedMetric(text,kind) {
+    const weight=kind==='weight',pattern=weight?
+      /\b([A0-9]\s*[, .]?\s*\d{3})\s*(?:K[G6EY]|V[G6Y])(?=\W|$)/g:
+      /\b(\d{3,4})\s*(?:M(?:M\b|\b)|1M\b|¥)(?=\W|$)/g;
+    return [...upper(text).matchAll(pattern)].flatMap(match=>
+      numbers(match[1].replace(/^A/,'4'),weight?200:30,weight?15000:4000));
+  }
   function readings(text, kind) {
     const pounds=[],other=[],explicit=[],min=kind==='length'?1000:500,max=kind==='length'?10000:30000;
     const otherMin=kind==='length'?30:200,otherMax=kind==='length'?4000:15000;
@@ -65,12 +72,14 @@
     if(chosen.error>limit){
       // A three-digit OCR fragment cannot be a 9,000 lb coil beside a 4,000 kg reading.
       if(chosen.error>Number(chosen.metric)*.15&&Number(chosen.lb)<2000)return ['',chosen.metric,true];
-      return [chosen.lb,'',true];
+      // When no pair agrees, the "least wrong" pair can still select a bad
+      // later OCR fragment over the clear primary reading.
+      return [pounds[0]||'','',true];
     }
     return [chosen.lb,chosen.metric,chosen.error>2||(repaired.has(chosen.metric)&&!direct.has(chosen.metric))];
   }
   function coilId(parts) {
-    const candidateText=[parts.idLine,parts.idTight,parts.idUpscaled,parts.idWide,parts.barcodeText,parts.id,parts.fullText,parts.idRaw]
+    const candidateText=[parts.idLine,parts.idTight,parts.idUpscaled,parts.idWide,parts.barcodeLine,parts.barcodeText,parts.id,parts.fullText,parts.idRaw]
       .map(text=>upper(text).replace(/\bJ\s+S(?=[0-9OQIL][A-Z0-9]{5})/g,'J')
         .replace(/\b([JH])\s+(?=[0-9OQILSB])/g,'$1')
         .replace(/([JH][0-9OQIL][A-Z0-9]{2}[0-9OQILS])\s+(?=[0-9OQILS][A-Z0-9])/g,'$1'));
@@ -107,7 +116,7 @@
       .replace(/[|\\;.,/\s]+$/,'').replace(/\s+/g,' ').trim();
     const codeLine=codeLines.find(line=>/\b(?:COL(?:OU)?R\s*TOP|COLOR\s*TOP)\b/.test(line))||'';
     const codePattern=/\b(?:PW|PC|PS|KT|JW|IW)(?:[0-9OQ]{3}|[0-9OQ]{2}[A-Z])\b/g;
-    const colourCodes=codeLines.concat(upper(alternate?.colourCodeTight),upper(alternate?.fullText)).flatMap(line=>
+    const colourCodes=[upper(alternate?.colourCodeLine),...codeLines,upper(alternate?.colourCodeTight),upper(alternate?.fullText)].flatMap(line=>
       line.match(codePattern)||[]);
     const codeRaw=(codeLine.match(codePattern)||[])[0]||
       colourCodes.find(x=>/\d{3}$/.test(x))||colourCodes[0]||'';
@@ -143,22 +152,36 @@
   function parse(parts) {
     const out=Object.fromEntries(FIELDS.map(id=>[id,'']));out.review=[];
     const normalizePart=value=>('L'+value.slice(1)).replace(/[OQ]/g,'0').replace(/I/g,'1');
-    const leftParts=[...upper(parts.left).matchAll(/\b[L1][0-9OQI]{3,6}[A-Z]\b/g)].map(x=>normalizePart(x[0]));
+    const leftParts=[...upper(parts.left).matchAll(/\b[L1][.,:]?\s*[0-9OQI]{3,6}[A-Z]\b/g)]
+      .map(x=>normalizePart(x[0].replace(/[.,:\s]/g,'')));
+    const upperPart=upper(parts.partUpper).match(/\b[L1][0-9OQI]{3,6}[A-Z]\b/);
     const rightPart=upper([parts.right,parts.rightAlt].join('\n')).match(/PART\s*NO\s*([L1][0-9OQI]{3,6}[A-Z])/);
     const right=rightPart&&normalizePart(rightPart[1]);
-    out.partNo=leftParts[0]||'';
+    out.partNo=leftParts[0]||(upperPart&&normalizePart(upperPart[0]))||'';
     if(right&&(leftParts.includes(right)||leftParts.some(x=>x.length===right.length+1&&[...x].some((_,i)=>x.slice(0,i)+x.slice(i+1)===right)))){
       if(out.partNo!==right)out.review.push('partNo');
       out.partNo=right;
     }
+    if(right&&out.partNo&&right!==out.partNo)out.review.push('partNo');
     if(/\b1[0-9OQI]{3,6}[A-Z]\b/.test(upper(parts.left)))out.review.push('partNo');
     const id=coilId(parts);out.coilId=id.value;if(id.review)out.review.push('coilId');
-    const color=colour(parts.right,{text:parts.rightAlt,colourCodeTight:parts.colourCodeTight,fullText:parts.fullText});out.colour=color.value;if(color.review)out.review.push('colour');
-    if(!out.partNo){const fromFull=upper(parts.fullText).match(/\bL[0-9OQI]{3,5}[A-Z]\b/);
+    const color=colour(parts.right,{text:parts.rightAlt,colourCodeTight:parts.colourCodeTight,
+      colourCodeLine:parts.colourCodeLine,fullText:parts.fullText});out.colour=color.value;if(color.review)out.review.push('colour');
+    const fromFull=upper(parts.fullText).match(/\bL[0-9OQI]{3,5}[A-Z]\b/);
+    if(out.partNo&&fromFull){
+      const full=normalizePart(fromFull[0]);
+      if(full.length===out.partNo.length&&full!==out.partNo&&
+        [...full].filter((c,i)=>c!==out.partNo[i]).length===1&&
+        !right){out.partNo=full;out.review.push('partNo');}
+    }
+    if(!out.partNo){
       if(fromFull){out.partNo=normalizePart(fromFull[0]);out.review.push('partNo');}}
     const row=upper([parts.weightBand,parts.fullText].filter(Boolean).join('\n')).split(/\n/)
       .find(line=>/\bLBS?\b/.test(line)&&numbers(line,1000,30000).length>=2);
-    const rowNumbers=row?numbers(row,1000,30000):[];
+    const rowCandidates=row?numbers(row,1000,30000):[];
+    const rowNumbers=rowCandidates.length>=2&&Number(rowCandidates[0])>=5000&&
+      Number(rowCandidates[1])>Number(rowCandidates[0])&&
+      Number(rowCandidates[1])<Number(rowCandidates[0])*1.25?rowCandidates:[];
     // In low light the small "LBS" print disappears first. The three large
     // columns still give net lb, gross lb and length ft in that order.
     const clearRow=!rowNumbers.length&&upper(parts.weightBand).split(/\n/)
@@ -178,14 +201,14 @@
       if(result[2])out.review.push(out[b]?b:a);
     }
     // The first full-label OCR pass sometimes reads a metric value that its small crop misses.
-    const fullMetric=[...upper([parts.fullText,parts.weightBand].join('\n')).matchAll(/([\d,.\s]{3,9})\s*K[G6E]\b/g)]
+    const fullMetric=[...upper([parts.fullText,parts.weightBand,parts.metricBand].join('\n')).matchAll(/([\d,.\s]{3,9})\s*K[G6E]\b/g)]
       .flatMap(match=>numbers(match[1],200,15000));
     for(const [lb,kg] of [['netLb','netKg'],['grossLb','grossKg']])if(out[lb]&&!out[kg]){
       const matches=[...new Set(fullMetric.filter(value=>Math.abs(Number(out[lb])*.45359237-Number(value))<=6))];
       if(matches.length===1){out[kg]=matches[0];out.review.push(kg);}
     }
     if(out.lengthFt&&!out.lengthM){
-      const candidates=[...new Set([...upper([parts.fullText,parts.id,parts.weightBand].join('\n')).matchAll(/\b(\d{3,4})\s*M\b/g)]
+      const candidates=[...new Set([...upper([parts.fullText,parts.id,parts.weightBand].join('\n')).matchAll(/\b(\d{3,4})\s*M(?:M\b|\b)/g)]
         .map(match=>match[1]).filter(value=>Math.abs(Number(value)-Number(out.lengthFt)*.3048)<=2))];
       if(candidates.length===1){out.lengthM=candidates[0];out.review.push('lengthM');}
     }
@@ -193,15 +216,41 @@
     // Accept an independently printed number with a damaged Vg/Vy/¥ unit
     // only when it agrees with the legible large imperial number.
     for(const [field,imperial,factor,limit,sources] of [
-      ['netKg','netLb',.45359237,6,[parts.netAlt,parts.netWide,parts.weightBand]],
-      ['grossKg','grossLb',.45359237,6,[parts.grossAlt,parts.grossWide,parts.weightBand]],
-      ['lengthM','lengthFt',.3048,2,[parts.lengthAlt,parts.lengthWide,parts.weightBand]]
+      ['netKg','netLb',.45359237,6,[parts.netAlt,parts.netWide,parts.weightBand,parts.metricBand]],
+      ['grossKg','grossLb',.45359237,6,[parts.grossAlt,parts.grossWide,parts.weightBand,parts.metricBand]],
+      ['lengthM','lengthFt',.3048,2,[parts.lengthAlt,parts.lengthWide,parts.weightBand,parts.metricBand]]
     ])if(out[imperial]&&!out[field]){
-      const printed=[...new Set(sources.flatMap(text=>[...upper(text).matchAll(
-        /\b(\d{1,2}\s*[, .]\s*\d{3}|\d{3,4})\s*(?:V[G6Y]|¥)(?=\W|$)/g)]
-        .flatMap(match=>numbers(match[1],field==='lengthM'?30:200,field==='lengthM'?4000:15000))))];
+      const printed=[...new Set(sources.flatMap(text=>printedMetric(text,field==='lengthM'?'length':'weight')))];
       const candidates=printed.filter(value=>Math.abs(Number(value)-Number(out[imperial])*factor)<=limit);
       if(candidates.length===1){out[field]=candidates[0];out.review.push(field);}
+    }
+    const oneDigitRepair=(printed,target,factor)=>{
+      const candidates=new Set();
+      for(let i=0;i<printed.length;i++)for(const digit of '0123456789'){
+        if(digit===printed[i]||i===0&&digit==='0')continue;
+        const candidate=printed.slice(0,i)+digit+printed.slice(i+1);
+        if(Math.abs(Number(candidate)*factor-target)<=.5)candidates.add(candidate);
+      }
+      return candidates.size===1?[...candidates][0]:'';
+    };
+    if(out.lengthFt&&!out.lengthM){
+      const sourceMetrics=[parts.length,parts.lengthAlt,parts.weightBand,parts.metricBand]
+        .map(text=>[...new Set(printedMetric(text,'length'))]);
+      const corroborated=[...new Set(sourceMetrics.flat())].filter(value=>
+        sourceMetrics.filter(source=>source.includes(value)).length>=2);
+      const repairs=corroborated.map(metric=>({metric,ft:oneDigitRepair(out.lengthFt,Number(metric),.3048)}))
+        .filter(x=>x.ft&&Math.abs(Number(x.ft)-Number(out.lengthFt))<Number(out.lengthFt)*.2);
+      if(repairs.length===1){out.lengthFt=repairs[0].ft;out.lengthM=repairs[0].metric;
+        out.review.push('lengthFt','lengthM');}
+    }
+    if(out.lengthFt&&!out.lengthM){
+      const footSources=[parts.length,parts.lengthAlt,parts.weightBand]
+        .filter(text=>numbers(text,1000,10000).includes(out.lengthFt)).length;
+      const metric=[...new Set(printedMetric(parts.weightBand,'length'))];
+      if(footSources>=2&&metric.length===1&&Math.abs(Number(metric[0])-Number(out.lengthFt)*.3048)<=10){
+        const corrected=oneDigitRepair(metric[0],Number(out.lengthFt)*.3048,1);
+        if(corrected){out.lengthM=corrected;out.review.push('lengthM');}
+      }
     }
     // Reject an extra leading digit when the second OCR pass and the net weight corroborate it.
     if(out.netLb&&out.grossLb&&Number(out.grossLb)>Number(out.netLb)*1.5){
@@ -211,6 +260,11 @@
     }
     if(out.netLb&&out.grossLb&&Number(out.grossLb)<Number(out.netLb)){
       out.grossLb='';out.review.push('grossLb');
+    }
+    if(out.netKg&&!out.grossKg&&!out.grossLb){
+      const metric=[...new Set(printedMetric(parts.metricBand,'weight'))];
+      if(metric.length===2&&metric[0]===out.netKg&&Number(metric[1])>Number(metric[0])&&
+        Number(metric[1])<Number(metric[0])*1.25){out.grossKg=metric[1];out.review.push('grossKg');}
     }
     out.review=[...new Set(out.review)];
     return out;

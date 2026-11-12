@@ -240,11 +240,38 @@
         regions[key]=region;parts[key]=await recognizeEnlarged(ocr,straight,region);
         values=CoilParser.parse(parts);
       }
+      if(!values.partNo){
+        await ocr.setParameters({tessedit_pageseg_mode:'8',tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'});
+        regions.partUpper=[.045,.215,.23,.09];
+        parts.partUpper=await recognizeEnlarged(ocr,straight,regions.partUpper);
+        values=CoilParser.parse(parts);
+      }
       if(!values.coilId||values.review.includes('coilId')){
         // A whole-word pass separates Z from 7 on the large printed ID.
         await ocr.setParameters({tessedit_pageseg_mode:'8',tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'});
         regions.idLine=[.37,.615,.30,.125];
         parts.idLine=await recognizeEnlarged(ocr,straight,regions.idLine,2);
+        values=CoilParser.parse(parts);
+      }
+      if(!values.coilId){
+        // The human-readable code beneath the barcode is a separate print of the ID.
+        await ocr.setParameters({tessedit_pageseg_mode:'7',tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'});
+        regions.barcodeLine=[.31,.845,.27,.045];
+        parts.barcodeLine=await recognizeEnlarged(ocr,straight,regions.barcodeLine);
+        values=CoilParser.parse(parts);
+      }
+      if(values.review.includes('colour')&&/KNOTTY|CHAMPAGNE/.test(parts.right||'')){
+        await ocr.setParameters({tessedit_pageseg_mode:'8',tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'});
+        regions.colourCodeLine=[.675,.59,.115,.065];
+        parts.colourCodeLine=await recognizeEnlarged(ocr,straight,regions.colourCodeLine);
+        values=CoilParser.parse(parts);
+      }
+      if(!values.netKg||!values.grossKg||!values.lengthM){
+        // Small metric type can read better as one sparse strip than as a tall
+        // crop mixed with the bold weight row and the barcode underneath.
+        await ocr.setParameters({tessedit_pageseg_mode:'11',tessedit_char_whitelist:''});
+        regions.metricBand=[.06,.61,.52,.07];
+        parts.metricBand=await recognizeEnlarged(ocr,straight,regions.metricBand);
         values=CoilParser.parse(parts);
       }
       report.ocr={regions,parts};report.parsed=values;report.stage='complete';event('scan-complete');
