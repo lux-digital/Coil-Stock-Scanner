@@ -48,7 +48,7 @@
   $('saveLiveReport').addEventListener('click',downloadReport);
   $('saveResultReport').addEventListener('click',downloadReport);
   function imageData(image, max) {
-    const width=image.naturalWidth||image.videoWidth, height=image.naturalHeight||image.videoHeight;
+    const width=image.naturalWidth||image.videoWidth||image.width, height=image.naturalHeight||image.videoHeight||image.height;
     const ratio = Math.min(1, max / Math.max(width, height));
     const canvas = max === 2400 ? fullCanvas : smallCanvas;
     canvas.width = Math.round(width * ratio);
@@ -240,6 +240,13 @@
         regions[key]=region;parts[key]=await recognizeEnlarged(ocr,straight,region);
         values=CoilParser.parse(parts);
       }
+      if(!values.coilId||values.review.includes('coilId')){
+        // A whole-word pass separates Z from 7 on the large printed ID.
+        await ocr.setParameters({tessedit_pageseg_mode:'8',tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'});
+        regions.idLine=[.37,.615,.30,.125];
+        parts.idLine=await recognizeEnlarged(ocr,straight,regions.idLine,2);
+        values=CoilParser.parse(parts);
+      }
       report.ocr={regions,parts};report.parsed=values;report.stage='complete';event('scan-complete');
       $('rawText').textContent=Object.entries(parts).map(([name,value])=>name.toUpperCase()+':\n'+value).join('\n');
       check(values);results.style.display='block';progressTo('Scan complete. Please check the fields against the image.',100);
@@ -251,6 +258,30 @@
   const video=$('cameraVideo'),overlay=$('cameraOverlay'),cameraStatus=$('cameraStatus');
   const torchButton=$('torchButton'),torchMessage=$('torchMessage');
   let torchRequested=false,torchActive=false,torchAvailable=false,torchBusy=false;
+  let soundContext=null;
+  function unlockCaptureSound(){
+    try{
+      soundContext ||= new (window.AudioContext||window.webkitAudioContext)();
+      if(soundContext.state==='suspended')soundContext.resume().catch(()=>{});
+    }catch(error){event('capture-sound-unavailable',{name:error.name||'Error'});}
+  }
+  function captureCue(){
+    try{
+      if(soundContext?.state==='running'){
+        const t=soundContext.currentTime;
+        for(const [offset,frequency] of [[0,880],[.13,1175]]){
+          const tone=soundContext.createOscillator(),gain=soundContext.createGain();
+          tone.type='sine';tone.frequency.value=frequency;
+          gain.gain.setValueAtTime(.001,t+offset);
+          gain.gain.exponentialRampToValueAtTime(.12,t+offset+.015);
+          gain.gain.exponentialRampToValueAtTime(.001,t+offset+.115);
+          tone.connect(gain).connect(soundContext.destination);
+          tone.start(t+offset);tone.stop(t+offset+.12);
+        }
+      }
+      navigator.vibrate?.(120);
+    }catch(error){event('capture-sound-error',{name:error.name||'Error'});}
+  }
   function torchNotice(message){torchMessage.textContent=message;torchMessage.hidden=!message;}
   function showTorchState(){
     torchButton.textContent=torchActive?'FLASHLIGHT ON':'FLASHLIGHT OFF';
@@ -279,22 +310,36 @@
     const track=stream?.getVideoTracks()[0];
     if(track&&torchAvailable&&!torchBusy)setTorch(track,!torchActive);
   });
-  function captureFrame(reason, showCheckFor=0){
-    if(!stream||!video.videoWidth||scanning)return;
+  function captureFrame(reason, showCheckFor=0,quality=null){
+    if(!stream||!video.videoWidth||scanning)return false;
     const frame=lastLiveImage||imageData(video,640),found=lastLiveFound||findLabel(frame);
     capturedLive=found?{found,width:frame.width,height:frame.height}:null;
-    event('camera-capture',{reason,corners:found?.corners||null,torchActive});
     const capture=document.createElement('canvas');capture.width=video.videoWidth;capture.height=video.videoHeight;
     capture.getContext('2d').drawImage(video,0,0);
+    if(reason==='automatic'&&found){
+      // Check the exact frame we will export, in case the camera delivered a
+      // new blurred frame between the small preview and the full-resolution draw.
+      const actual=imageData(capture,960),scaled={corners:found.corners.map(p=>({x:p.x*actual.width/frame.width,y:p.y*actual.height/frame.height}))};
+      const actualQuality=core.labelDetail(actual,scaled);
+      if(actualQuality.detail<110||actualQuality.glare>=.025){
+        event('camera-capture-rejected',{previewQuality:quality,actualQuality});
+        return false;
+      }
+      quality={...quality,actualQuality};
+    }
     const dataURL=capture.toDataURL('image/jpeg',.9);report.images['original-frame.jpg']=dataURL;
+    event('camera-capture',{reason,corners:found?.corners||null,torchActive,quality,soundState:soundContext?.state||'unavailable'});
+    captureCue(); // The chime follows a successfully saved frame, never a tentative green outline.
     if(showCheckFor)video.pause(); // Keep the green outline on the frame that was captured.
     const finish=()=>{captureTimer=null;
       report.images['camera-boundary.jpg']=frameImage(frame,found,'Captured '+reason);
       report.images['blue-pixel-mask.png']=maskImage(frame);
       stopCamera();image=new Image();image.onload=()=>{preview.src=dataURL;$('previewWrapper').style.display='block';runScan();};image.src=dataURL;};
     if(showCheckFor)captureTimer=setTimeout(finish,showCheckFor);else finish();
+    return true;
   }
-  $('captureNow').addEventListener('click',()=>captureFrame('manual'));
+  $('captureNow').addEventListener('click',()=>{unlockCaptureSound();captureFrame('manual');});
+  $('testSound').addEventListener('click',()=>{unlockCaptureSound();captureCue();});
   function stopCamera(){
     if(cameraTimer){clearInterval(cameraTimer);cameraTimer=null;}
     if(captureTimer){clearTimeout(captureTimer);captureTimer=null;}
@@ -328,6 +373,7 @@
   $('startCamera').addEventListener('click',async()=>{
     if(scanning)return;
     resetReport('live-camera');report.stage='camera-starting';
+    unlockCaptureSound(); // iOS needs audio enabled directly from the user's tap.
     if(!navigator.mediaDevices?.getUserMedia){cameraStatus.textContent='Live camera is unavailable. Use the photo picker below.';return;}
     try{
       stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
@@ -345,7 +391,7 @@
       if(torchRequested&&torchAvailable)await setTorch(track,true);
       lastLiveImage=null;lastLiveFound=null;
       drawLiveOutline(null,{width:1,height:1},false);
-      let stability={last:null,lastSeen:0,steady:0},busy=false,lastFrameAt=0;
+      let stability={last:null,lastSeen:0,steady:0,stableSince:0},busy=false,lastFrameAt=0;
       cameraTimer=setInterval(()=>{
         if(busy||scanning||!video.videoWidth)return;busy=true;
         try{
@@ -354,28 +400,38 @@
           const img=imageData(video,480),found=findLabel(img);
           lastLiveImage=img;lastLiveFound=found;
           const c=overlay;
-          let acceptable=false;
+          let acceptable=false,quality=null;
           if(found){
             acceptable=core.labelReady(found,img.width,img.height);
-            // Compare the label's overall position, so ordinary hand movement does not restart capture.
-            stability=core.advanceLiveCapture(stability,found,acceptable,started);
-            const recognized=acceptable&&stability.steady>=2;
+            if(acceptable){
+              const detailed=imageData(video,960);
+              const scaled={corners:found.corners.map(p=>({x:p.x*detailed.width/img.width,y:p.y*detailed.height/img.height}))};
+              quality=core.labelDetail(detailed,scaled);
+            }
+            stability=core.advanceLiveCapture(stability,found,acceptable,started,quality);
+            const recognized=acceptable&&stability.steady>=4&&started-stability.stableSince>=500;
             drawLiveOutline(found,img,recognized);
           }else{
-            stability=core.advanceLiveCapture(stability,null,false,started);
+            stability=core.advanceLiveCapture(stability,null,false,started,null);
             if(!stability.last)drawLiveOutline(null,img,false);
           }
           const margin=Math.max(4,Math.round(Math.min(img.width,img.height)*.012));
           const reason=!found?'no-blue-label-candidate':found.coverage<.10?'too-small':found.fill<.68||found.fill>1.08?'unreliable-shape':
             found.corners.some(q=>q.x<margin||q.y<margin||q.x>=img.width-margin||q.y>=img.height-margin)?'touches-camera-edge':'candidate-visible';
-          event('camera-frame',{reason,acceptable,steady:stability.steady,intervalMs,detectionMs:Math.round(performance.now()-started),frameWidth:img.width,frameHeight:img.height,
+          event('camera-frame',{reason,acceptable,steady:stability.steady,motion:stability.motion,quality,intervalMs,detectionMs:Math.round(performance.now()-started),frameWidth:img.width,frameHeight:img.height,
             coverage:found?.coverage||null,fill:found?.fill||null,ratio:found?.ratio||null,borderRefined:!!found?.borderRefined,
             shadowBorderRefined:!!found?.shadowBorderRefined,corners:found?.corners||null,
             overlayWidth:c.width,overlayHeight:c.height});
-          cameraStatus.textContent=stability.steady>=2&&acceptable?'✓ Label recognized. Scanning...':acceptable?'Label found. Keep it in view...':reason==='touches-camera-edge'?'Move back until the whole label fits.':'Point the camera at the full blue label.';
-          if(stability.steady>=2&&acceptable){
-            clearInterval(cameraTimer);cameraTimer=null;
-            captureFrame('automatic',500);
+          const ready=acceptable&&stability.steady>=4&&started-stability.stableSince>=500;
+          cameraStatus.textContent=ready?'✓ Label sharp. Capturing...':acceptable&&quality?.glare>=.025?
+            'Glare across the label. Tilt the phone slightly.':acceptable&&quality?.detail<110?
+            'Text is blurry. Hold steady and keep aiming.':acceptable?'Label found. Hold steady for the chime.':
+            reason==='touches-camera-edge'?'Move back until the whole label fits.':'Point the camera at the full blue label.';
+          if(ready){
+            if(captureFrame('automatic',500,{...quality,steady:stability.steady,motion:stability.motion,heldMs:Math.round(started-stability.stableSince)})){
+              clearInterval(cameraTimer);cameraTimer=null;
+              cameraStatus.textContent='✓ Photo captured. You can lower the phone.';
+            }else stability={last:null,lastSeen:0,steady:0,stableSince:0};
           }
         }catch(error){console.error(error);report.error={message:error.message,stack:error.stack};report.stage='camera-error';event('camera-error',{message:error.message});stopCamera();cameraStatus.textContent='Camera preview stopped. Use the photo picker below.';}
         finally{busy=false;}

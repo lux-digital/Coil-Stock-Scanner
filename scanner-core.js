@@ -185,11 +185,49 @@
       Math.max(0,Math.min(x.bottom,y.bottom)-Math.max(x.top,y.top));
     return areaX>0&&areaY>0&&intersection/(areaX+areaY-intersection)>.60;
   }
-  function advanceLiveCapture(state,found,acceptable,now) {
-    if(found&&acceptable)return {last:found,lastSeen:now,
-      steady:state.last&&now-state.lastSeen<850&&sameLiveLabel(found,state.last)?state.steady+1:1};
-    if(found||now-state.lastSeen>850)return {last:null,lastSeen:0,steady:0};
-    return state; // A brief missed detection should not restart the countdown.
+  function cornerMotion(a,b) {
+    if(!a||!b)return Infinity;
+    const size=Math.min(...[0,1,2,3].map(i=>distance(b.corners[i],b.corners[(i+1)%4])));
+    if(size<=0)return Infinity;
+    // The detector can choose a different first corner on consecutive frames.
+    return Math.min(...[0,1,2,3].map(shift=>
+      b.corners.reduce((sum,p,i)=>sum+distance(p,a.corners[(i+shift)%4]),0)/4))/size;
+  }
+  function labelDetail(image,found) {
+    if(!found)return {detail:0,glare:1};
+    // Measure print edges inside the label. A blue border alone cannot make a
+    // defocused label pass; this also excludes most of the reflective coil.
+    const w=160,h=120,gray=new Uint8Array(w*h),p=found.corners;
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+      const u=.15+(x+.5)/w*.70,v=.17+(y+.5)/h*.66;
+      const px=(1-u)*(1-v)*p[0].x+u*(1-v)*p[1].x+u*v*p[2].x+(1-u)*v*p[3].x;
+      const py=(1-u)*(1-v)*p[0].y+u*(1-v)*p[1].y+u*v*p[2].y+(1-u)*v*p[3].y;
+      const i=(Math.max(0,Math.min(image.height-1,Math.round(py)))*image.width+
+        Math.max(0,Math.min(image.width-1,Math.round(px))))*4;
+      gray[y*w+x]=Math.round(image.data[i]*.2+image.data[i+1]*.5+image.data[i+2]*.3);
+    }
+    const histogram=new Uint32Array(256);let valid=0,glare=0;
+    for(let y=2;y<h-2;y++)for(let x=2;x<w-2;x++){
+      const i=y*w+x,g=gray[i];
+      if(g>235)glare++;
+      if(g<40||g>230)continue;
+      const edge=Math.abs(gray[i-1]+gray[i+1]+gray[i-w]+gray[i+w]-4*g);
+      histogram[Math.min(255,edge)]++;valid++;
+    }
+    let rank=0,detail=0;
+    for(let i=0;i<histogram.length;i++)if((rank+=histogram[i])>=valid*.9){detail=i;break;}
+    return {detail,glare:glare/((w-4)*(h-4))};
+  }
+  function advanceLiveCapture(state,found,acceptable,now,quality) {
+    const blank={last:null,lastSeen:0,steady:0,stableSince:0,motion:null};
+    if(!found||!acceptable)return blank;
+    const motion=cornerMotion(state.last,found);
+    // Allow small overhead hand sway; sharpness protects against motion blur.
+    const stable=state.last&&now-state.lastSeen<500&&sameLiveLabel(found,state.last)&&motion<=.12;
+    const clear=quality&&quality.detail>=110&&quality.glare<.025;
+    const steady=clear?(stable?state.steady+1:1):0;
+    return {last:found,lastSeen:now,steady,stableSince:steady?(stable&&state.stableSince?state.stableSince:now):0,
+      motion:Number.isFinite(motion)?motion:null};
   }
   function reconcileCaptureCorners(found,live,width,height,liveWidth,liveHeight) {
     if(!live||!liveWidth||!liveHeight||!labelReady(live,liveWidth,liveHeight))return {found,corrected:[]};
@@ -267,5 +305,5 @@
   function orientationScore(text) {
     const t=text.toUpperCase();return (t.match(/COIL|COATED|STEEL|PART|CSM|CLR|ASTM|VANCOUVER|KOREA|LBS|UNION|NET|GROSS|WEIGHT/g)||[]).length;
   }
-  return {FIELD_IDS,blueMask,detectLabel,labelReady,refineBorderCorners,refineShadowBoundary,sameLiveLabel,advanceLiveCapture,reconcileCaptureCorners,warp,rotate,enhance,crop,orientationScore};
+  return {FIELD_IDS,blueMask,detectLabel,labelReady,refineBorderCorners,refineShadowBoundary,sameLiveLabel,cornerMotion,labelDetail,advanceLiveCapture,reconcileCaptureCorners,warp,rotate,enhance,crop,orientationScore};
 });

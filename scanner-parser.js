@@ -70,21 +70,25 @@
     return [chosen.lb,chosen.metric,chosen.error>2||(repaired.has(chosen.metric)&&!direct.has(chosen.metric))];
   }
   function coilId(parts) {
-    const candidateText=[parts.idTight,parts.idUpscaled,parts.idWide,parts.barcodeText,parts.id,parts.fullText,parts.idRaw]
+    const candidateText=[parts.idLine,parts.idTight,parts.idUpscaled,parts.idWide,parts.barcodeText,parts.id,parts.fullText,parts.idRaw]
       .map(text=>upper(text).replace(/\bJ\s+S(?=[0-9OQIL][A-Z0-9]{5})/g,'J')
         .replace(/\b([JH])\s+(?=[0-9OQILSB])/g,'$1')
         .replace(/([JH][0-9OQIL][A-Z0-9]{2}[0-9OQILS])\s+(?=[0-9OQILS][A-Z0-9])/g,'$1'));
     const candidates=candidateText.flatMap(text=>text.match(/[JH][A-Z0-9]{6}(?![A-Z0-9])/g)||[]);
     const valid=value=>/^[A-Z][0-9OQIL][A-Z0-9]{2}[0-9OQILS]{2}[A-Z0-9OQILS]$/.test(value);
+    const normalize=value=>[...value].map((c,i)=>[1,4,5].includes(i)?({'O':'0','Q':'0','I':'1','L':'1','S':'5'}[c]||c):c).join('');
+    const line=(candidateText[0].match(/[JH][A-Z0-9]{6}(?![A-Z0-9])/g)||[]).find(valid);
     const value=(parts.barcodeDecoded&&upper(parts.barcodeDecoded))||
+      (line&&candidates.slice(1).some(x=>valid(x)&&normalize(x)===normalize(line))?line:null)||
       candidates.find(valid)||candidates[0];
     if(!value)return {value:'',review:false};
     // These labels use letter, digit, two letters, two digits, then an alphanumeric suffix.
     if(parts.barcodeDecoded && value===upper(parts.barcodeDecoded))return {value,review:false};
     if(value.length!==7 || !valid(value))return {value:'',review:true};
-    const normalized=[...value].map((c,i)=>[1,4,5].includes(i)?({'O':'0','Q':'0','I':'1','L':'1','S':'5'}[c]||c):c).join('');
+    const normalized=normalize(value);
     const rawFallback=!!parts.idRaw&&!candidateText.slice(0,-1).some(text=>text.includes(value));
-    return {value:normalized,review:normalized!==value||rawFallback};
+    const conflict=candidates.some(x=>valid(x)&&normalize(x)!==normalized);
+    return {value:normalized,review:normalized!==value||rawFallback||conflict};
   }
   function colour(text, alternate) {
     const lines=upper(text).split(/\n/).map(s=>s.trim()).filter(Boolean);
@@ -110,10 +114,14 @@
     const code=codeRaw.slice(0,2)+codeRaw.slice(2).replace(/[OQ]/g,'0');
     const incomplete=name.includes('(') && !name.includes(')');
     if(incomplete&&code){
-      if(/^(?:KNOTTY|CHAMPAGNE)/.test(name))return {value:name.replace(/\s*\([^)]*$/,'').trim()+' ('+code+')',review:true};
+      if(/^(?:KNOTTY|CHAMPAGNE|BLACK ONYX|WHITE OAK|PECAN)/.test(name))return {value:name.replace(/\s*\([^)]*$/,'').trim()+' ('+code+')',review:true};
       return {value:code,review:true};
     }
     if(incomplete)name=name.replace(/\s*\([^)]*$/,'').trim();
+    if(/\((?:KT|PW|PC|PS)[0-9OQ@]{3}\)/.test(name)){
+      const corrected=name.replace(/\(((?:KT|PW|PC|PS)[0-9OQ@]{3})\)/,(_,raw)=>'('+raw.slice(0,2)+raw.slice(2).replace(/[OQ@]/g,'0')+')');
+      if(corrected!==name)return {value:corrected,review:true};
+    }
     // A second printed colour code can correct a damaged character inside parentheses.
     const inside=name.match(/\(([A-Z0-9@]{4,6})\)/);
     let corrected=false;
@@ -151,11 +159,19 @@
     const row=upper([parts.weightBand,parts.fullText].filter(Boolean).join('\n')).split(/\n/)
       .find(line=>/\bLBS?\b/.test(line)&&numbers(line,1000,30000).length>=2);
     const rowNumbers=row?numbers(row,1000,30000):[];
+    // In low light the small "LBS" print disappears first. The three large
+    // columns still give net lb, gross lb and length ft in that order.
+    const clearRow=!rowNumbers.length&&upper(parts.weightBand).split(/\n/)
+      .map(line=>numbers(line,1000,30000)).find(ns=>ns.length>=3&&
+        Number(ns[0])>=5000&&Number(ns[1])>Number(ns[0])&&
+        Number(ns[1])<Number(ns[0])*1.25&&Number(ns[2])>=1000&&Number(ns[2])<=10000);
     for(const [source,alt,kind,a,b] of [
       ['net','netAlt','weight','netLb','netKg'],
       ['gross','grossAlt','weight','grossLb','grossKg'],
       ['length','lengthAlt','length','lengthFt','lengthM']]) {
-      const fallback=kind==='weight'&&rowNumbers.length>=2?rowNumbers[source==='net'?0:1]+' LBS':'';
+      const fallbackNumber=kind==='weight'?(rowNumbers.length>=2?rowNumbers[source==='net'?0:1]:
+        clearRow?.[source==='net'?0:1]):null;
+      const fallback=fallbackNumber?fallbackNumber+' LBS':'';
       const alternative=[parts[alt],parts[source+'Wide'],parts[source+'Upper'],parts[source+'MetricTight'],parts[source+'MetricLower'],fallback].filter(Boolean).join('\n');
       const result=pair(parts[source],alternative,kind);
       out[a]=result[0];out[b]=result[1];
@@ -172,6 +188,20 @@
       const candidates=[...new Set([...upper([parts.fullText,parts.id,parts.weightBand].join('\n')).matchAll(/\b(\d{3,4})\s*M\b/g)]
         .map(match=>match[1]).filter(value=>Math.abs(Number(value)-Number(out.lengthFt)*.3048)<=2))];
       if(candidates.length===1){out.lengthM=candidates[0];out.review.push('lengthM');}
+    }
+    // Flashlight reflections sometimes corrupt only the tiny unit glyph.
+    // Accept an independently printed number with a damaged Vg/Vy/¥ unit
+    // only when it agrees with the legible large imperial number.
+    for(const [field,imperial,factor,limit,sources] of [
+      ['netKg','netLb',.45359237,6,[parts.netAlt,parts.netWide,parts.weightBand]],
+      ['grossKg','grossLb',.45359237,6,[parts.grossAlt,parts.grossWide,parts.weightBand]],
+      ['lengthM','lengthFt',.3048,2,[parts.lengthAlt,parts.lengthWide,parts.weightBand]]
+    ])if(out[imperial]&&!out[field]){
+      const printed=[...new Set(sources.flatMap(text=>[...upper(text).matchAll(
+        /\b(\d{1,2}\s*[, .]\s*\d{3}|\d{3,4})\s*(?:V[G6Y]|¥)(?=\W|$)/g)]
+        .flatMap(match=>numbers(match[1],field==='lengthM'?30:200,field==='lengthM'?4000:15000))))];
+      const candidates=printed.filter(value=>Math.abs(Number(value)-Number(out[imperial])*factor)<=limit);
+      if(candidates.length===1){out[field]=candidates[0];out.review.push(field);}
     }
     // Reject an extra leading digit when the second OCR pass and the net weight corroborate it.
     if(out.netLb&&out.grossLb&&Number(out.grossLb)>Number(out.netLb)*1.5){

@@ -15,17 +15,37 @@ assert(core.sameLiveLabel(frames[1],frames[2]));
 assert(!core.sameLiveLabel(frames[0],candidate([[15,15],[90,15],[90,160],[15,160]])));
 assert(!core.labelReady(candidate([[1,60],[275,60],[275,490],[1,490]]),360,640));
 
-let state={last:null,lastSeen:0,steady:0};
-state=core.advanceLiveCapture(state,frames[0],true,1000);
+const sharp={detail:154,glare:.005},blurred={detail:76,glare:.04};
+let state={last:null,lastSeen:0,steady:0,stableSince:0};
+state=core.advanceLiveCapture(state,frames[0],true,1000,sharp);
 assert.equal(state.steady,1);
-state=core.advanceLiveCapture(state,null,false,1180);
-assert.equal(state.steady,1); // A single noisy frame must not restart capture.
-state=core.advanceLiveCapture(state,frames[1],true,1360);
-assert.equal(state.steady,2);
-state=core.advanceLiveCapture(state,null,false,2300);
+assert(core.cornerMotion(frames[0],frames[1])>.12);
+state=core.advanceLiveCapture(state,frames[1],true,1180,sharp);
+assert.equal(state.steady,1); // A shifting label cannot count as held still.
+state=core.advanceLiveCapture(state,frames[1],true,1360,blurred);
 assert.equal(state.steady,0);
-state=core.advanceLiveCapture(state,frames[2],true,2500);
-assert.equal(state.steady,1); // A new label still needs a second reading.
+for(let i=0;i<4;i++)state=core.advanceLiveCapture(state,frames[2],true,1540+i*180,sharp);
+assert.equal(state.steady,4);
+assert.equal(2080-state.stableSince,540); // Four distinct ticks, over half a second.
+state=core.advanceLiveCapture(state,null,false,2260,sharp);
+assert.equal(state.steady,0);
+
+// The saved dark-condition traces moved about 12–49 preview pixels between
+// the two frames that previously triggered capture.
+const darkA=candidate([[209,25],[200,365],[31,372],[17,22]]);
+const darkB=candidate([[232,68],[225,409],[52,410],[45,66]]);
+assert(core.cornerMotion(darkA,darkB)>.12);
+const widthDetail=320,heightDetail=200;
+const sharpPixels=new Uint8ClampedArray(widthDetail*heightDetail*4);
+const softPixels=new Uint8ClampedArray(sharpPixels.length);
+for(let y=0;y<heightDetail;y++)for(let x=0;x<widthDetail;x++){
+  const i=(y*widthDetail+x)*4,v=Math.floor(x/4)%2?30:185;
+  for(let c=0;c<3;c++){sharpPixels[i+c]=v;softPixels[i+c]=120;}
+  sharpPixels[i+3]=softPixels[i+3]=255;
+}
+const inset=candidate([[8,8],[312,8],[312,192],[8,192]]);
+assert(core.labelDetail({width:widthDetail,height:heightDetail,data:sharpPixels},inset).detail>=100);
+assert(core.labelDetail({width:widthDetail,height:heightDetail,data:softPixels},inset).detail<100);
 
 // The manually captured label has a dark border inside a blue-tinted camera frame.
 // The colour mask alone picked the image corners; the border is inside the frame.
