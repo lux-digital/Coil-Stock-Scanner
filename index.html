@@ -23,9 +23,9 @@
     -->
     <script defer src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
     <script defer src="scanner-core.js?v=15"></script>
-    <script defer src="scanner-parser.js?v=10"></script>
+    <script defer src="scanner-parser.js?v=11"></script>
     <script defer src="diagnostics.js?v=3"></script>
-    <script defer src="scanner.js?v=20"></script>
+    <script defer src="scanner.js?v=21"></script>
 
     <style>
         * {
@@ -347,7 +347,8 @@
             display: none;
         }
         #straightenedPreview,
-        #secondPreview {
+        #secondPreview,
+        #thirdPreview {
             width: 100%;
             border-radius: 12px;
             margin-top: 12px;
@@ -515,6 +516,10 @@
         <details id="secondPreviewDetails" hidden>
             <summary>View other snapshot</summary>
             <img id="secondPreview" alt="Other straightened label for checking the results">
+        </details>
+        <details id="thirdPreviewDetails" hidden>
+            <summary>View third snapshot</summary>
+            <img id="thirdPreview" alt="Third straightened label for checking the results">
         </details>
 
         <div class="grid">

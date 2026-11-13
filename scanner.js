@@ -8,11 +8,12 @@
   const progress = $('progressArea'), bar = $('progressBar'), status = $('progressText');
   const fullCanvas = document.createElement('canvas'), smallCanvas = document.createElement('canvas');
   let image = null, url = null, worker = null, stream = null, cameraTimer = null, captureTimer = null, scanning = false, pairing = false;
-  let lastLiveImage=null, lastLiveFound=null, capturedLive=null, alternatePhoto=null;
+  let lastLiveImage=null, lastLiveFound=null, capturedLive=null, alternatePhotos=[];
   let report={startedAt:new Date().toISOString(),source:'none',events:[],images:{},stage:'ready'};
   function event(name,details={}) {report.events.push({at:new Date().toISOString(),name,...details});if(report.events.length>240)report.events.shift();}
   function showReportButton(){ $('saveLiveReport').hidden=false;$('reportHint').hidden=false; }
-  function resetReport(source){capturedLive=null;alternatePhoto=null;$('secondPreviewDetails').hidden=true;$('secondPreview').removeAttribute('src');
+  function resetReport(source){capturedLive=null;alternatePhotos=[];$('secondPreviewDetails').hidden=true;$('secondPreview').removeAttribute('src');
+    $('thirdPreviewDetails').hidden=true;$('thirdPreview').removeAttribute('src');
     report={startedAt:new Date().toISOString(),source,events:[],images:{},stage:'ready'};showReportButton();event('new-test');}
   function frameImage(frame,found,caption='Detection preview') {
     const c=toCanvas(frame),x=c.getContext('2d');
@@ -32,10 +33,11 @@
       if(lastLiveImage){report.images['camera-boundary.jpg']=frameImage(lastLiveImage,lastLiveFound,report.stage);
         report.images['blue-pixel-mask.png']=maskImage(lastLiveImage,lastLiveFound);}
       if(image&&!report.images['original-frame.jpg'])report.images['original-frame.jpg']=toCanvas(imageData(image,2400)).toDataURL('image/jpeg',.86);
-      const metadata={version:'4',exportedAt:new Date().toISOString(),source:report.source,startedAt:report.startedAt,stage:report.stage,
+      const metadata={version:'5',exportedAt:new Date().toISOString(),source:report.source,startedAt:report.startedAt,stage:report.stage,
         browser:navigator.userAgent,screen:{width:screen.width,height:screen.height,devicePixelRatio:devicePixelRatio},
         viewport:{width:innerWidth,height:innerHeight},
         camera:report.camera||null,capture:report.capture||null,secondary:report.secondary||null,
+        third:report.third||null,comparison:report.comparison||null,
         events:report.events,detection:report.detection||null,
         orientation:report.orientation||null,ocr:report.ocr||null,parsed:report.parsed||null,error:report.error||null,
         displayedFields:Object.fromEntries(core.FIELD_IDS.map(id=>[id,$(id).value]))};
@@ -90,9 +92,12 @@
   function check(data) {
     const messages=[],bad=new Set(),confirmed=new Set(),numeric=id=>Number(data[id]);
     if(report.capture?.mode==='automatic-reach')messages.push('Overhead photo used the best available frame. Check every reading against the image.');
-    if(report.secondary?.identityMismatch)messages.push('The two photos may show different labels. Only the first was used.');
-    else if(report.secondary?.conflicts?.length)for(const field of report.secondary.conflicts){
-      bad.add(field);messages.push('Two photos disagree on '+$(field).previousElementSibling.textContent.toLowerCase()+'.');
+    if(report.comparison?.excludedShots?.length)messages.push('A photo could not be matched to the same label. Check the coil ID and part number.');
+    else if(report.secondary?.identityMismatch)messages.push('The two photos may show different labels. Only the first was used.');
+    const conflicts=report.comparison?.conflicts||report.secondary?.conflicts||[];
+    for(const field of conflicts){
+      if(field==='identity')continue;
+      bad.add(field);messages.push('Photos disagree on '+$(field).previousElementSibling.textContent.toLowerCase()+'.');
     }
     for(const id of data.review||[]){bad.add(id);messages.push('Check '+$(id).previousElementSibling.textContent.toLowerCase()+' against the label.');}
     for(const [a,b,f,name] of [['netLb','netKg',.45359237,'Net weight'],['grossLb','grossKg',.45359237,'Gross weight'],['lengthFt','lengthM',.3048,'Length']]) {
@@ -132,9 +137,9 @@
       rect[2]*canvas.width,rect[3]*canvas.height,0,0,crop.width,crop.height);
     return (await ocr.recognize(crop)).data.text;
   }
-  async function readSecondPhoto(ocr,shot,reference,chosen,needed) {
+  async function readOtherPhoto(ocr,shot,reference,chosen,needed,slot=2) {
     const photo=new Image();
-    await new Promise((resolve,reject)=>{photo.onload=resolve;photo.onerror=()=>reject(new Error('Second photo could not be opened.'));photo.src=shot.dataURL;});
+    await new Promise((resolve,reject)=>{photo.onload=resolve;photo.onerror=()=>reject(new Error('Other photo could not be opened.'));photo.src=shot.dataURL;});
     const small=imageData(photo,640),detected=findLabel(small);
     const adjusted=detected?.shadowBorderRefined?{found:detected}:
       core.reconcileCaptureCorners(detected,shot.live?.found,small.width,small.height,shot.live?.width,shot.live?.height);
@@ -143,14 +148,15 @@
       core.labelReady(shot.live?.found,shot.live?.width,shot.live?.height))
       boundary={...shot.live.found,corners:shot.live.found.corners.map(p=>({
         x:p.x*small.width/shot.live.width,y:p.y*small.height/shot.live.height}))};
-    if(!core.labelReady(boundary,small.width,small.height))throw new Error('Second photo has no complete label.');
+    if(!core.labelReady(boundary,small.width,small.height))throw new Error('Other photo has no complete label.');
     const found=core.alignCorners(reference,boundary),full=imageData(photo,2400);
     const corners=found.corners.map(p=>({x:p.x*full.width/small.width,y:p.y*full.height/small.height}));
     let label=core.warp(full,corners);if(chosen)label=core.rotate(label,2);
     const straight=toCanvas(label),enhanced=toCanvas(core.enhance(label));
     const straightURL=straight.toDataURL('image/jpeg',.86);
-    report.images['alternate-straightened-label.jpg']=straightURL;
-    $('secondPreview').src=straightURL;$('secondPreviewDetails').hidden=false;
+    report.images[slot===3?'third-straightened-label.jpg':'alternate-straightened-label.jpg']=straightURL;
+    $(slot===3?'thirdPreview':'secondPreview').src=straightURL;
+    $(slot===3?'thirdPreviewDetails':'secondPreviewDetails').hidden=false;
     const regions={},parts={},need=new Set(needed);
     const read=async(key,canvas,rect,psm='6',whitelist='')=>{
       regions[key]=rect;parts[key]=await recognizeRegion(ocr,canvas,rect,psm,whitelist);
@@ -353,24 +359,51 @@
         values=CoilParser.parse(parts);
       }
       }
-      let secondaryParts=null;
+      let secondaryParts=null,thirdParts=null;
       const needed=CoilParser.retryFields(values);
-      if(alternatePhoto&&needed.length){
+      if(alternatePhotos[0]&&needed.length){
+        const readings=[{values,parts,shotNumber:report.capture.primaryShot}];
+        let thirdNeeded=[];
         progressTo('Checking uncertain fields in the other photo...',86);report.stage='second-photo';
         try{
-          const second=await readSecondPhoto(ocr,alternatePhoto,found,chosen,needed);
+          const second=await readOtherPhoto(ocr,alternatePhotos[0],found,chosen,needed);
+          readings.push({values:second.values,parts:second.parts,shotNumber:alternatePhotos[0].shotNumber});
           const merged=CoilParser.mergeSnapshots(values,second.values,parts);
           values=merged.values;secondaryParts=second.parts;
-          report.secondary={needed,regions:second.regions,parts:second.parts,parsed:second.values,
+          report.secondary={needed,shotNumber:alternatePhotos[0].shotNumber,regions:second.regions,parts:second.parts,parsed:second.values,
             used:merged.used,conflicts:merged.conflicts,identityMismatch:merged.identityMismatch,
             corners:second.found.corners};
           event('second-photo-read',{used:merged.used,conflicts:merged.conflicts,identityMismatch:merged.identityMismatch});
-        }catch(error){report.secondary={needed,error:error.message};event('second-photo-failed',{message:error.message});}
-      }else if(alternatePhoto)report.secondary={needed:[],used:[],skipped:'First photo had no missing or uncertain fields.'};
-      alternatePhoto=null;
+          const unconfirmed=['coilId','partNo','netKg','grossKg','netLb','grossLb','lengthM','lengthFt','colour']
+            .filter(field=>needed.includes(field)&&!!readings[0].values[field]!==!!second.values[field]);
+          thirdNeeded=[...new Set([...core.FIELD_IDS.filter(field=>!values[field]),
+            ...merged.conflicts.filter(field=>core.FIELD_IDS.includes(field)),
+            ...(merged.identityMismatch?['partNo','coilId']:[]),...unconfirmed.slice(0,3)])];
+        }catch(error){report.secondary={needed,error:error.message};event('second-photo-failed',{message:error.message});
+          thirdNeeded=needed;}
+        if(alternatePhotos[1]&&thirdNeeded.length){
+          progressTo('Resolving fields with the third photo...',92);report.stage='third-photo';
+          try{
+            const third=await readOtherPhoto(ocr,alternatePhotos[1],found,chosen,thirdNeeded,3);
+            readings.push({values:third.values,parts:third.parts,shotNumber:alternatePhotos[1].shotNumber});
+            thirdParts=third.parts;
+            const comparison=CoilParser.mergeThreeSnapshots(readings);
+            values=comparison.values;
+            report.third={needed:thirdNeeded,shotNumber:alternatePhotos[1].shotNumber,regions:third.regions,parts:third.parts,parsed:third.values,
+              corners:third.found.corners};
+            report.comparison={used:comparison.used,conflicts:comparison.conflicts,
+              selectedShots:comparison.selectedShots,excludedShots:comparison.excludedShots,
+              identityMismatch:comparison.identityMismatch};
+            event('third-photo-read',report.comparison);
+          }catch(error){report.third={needed:thirdNeeded,error:error.message};event('third-photo-failed',{message:error.message});}
+        }else if(alternatePhotos[1])report.third={needed:[],skipped:'Two photos settled all missing and disputed fields.'};
+      }else if(alternatePhotos.length){report.secondary={needed:[],used:[],skipped:'First photo had no missing or uncertain fields.'};
+        if(alternatePhotos[1])report.third={needed:[],skipped:'First photo had no missing or uncertain fields.'};}
+      alternatePhotos=[];
       report.ocr={regions,parts};report.parsed=values;report.stage='complete';event('scan-complete');
       $('rawText').textContent=Object.entries(parts).map(([name,value])=>name.toUpperCase()+':\n'+value).join('\n')+
-        (secondaryParts?'\n\nOTHER PHOTO:\n'+Object.entries(secondaryParts).map(([name,value])=>name.toUpperCase()+':\n'+value).join('\n'):'');
+        (secondaryParts?'\n\nOTHER PHOTO:\n'+Object.entries(secondaryParts).map(([name,value])=>name.toUpperCase()+':\n'+value).join('\n'):'')+
+        (thirdParts?'\n\nTHIRD PHOTO:\n'+Object.entries(thirdParts).map(([name,value])=>name.toUpperCase()+':\n'+value).join('\n'):'');
       check(values);results.style.display='block';progressTo('Scan complete. Please check the fields against the image.',100);
       results.scrollIntoView({behavior:'smooth',block:'start'});
     }catch(error){console.error(error);report.error={message:error.message,stack:error.stack};report.stage='failed';event('scan-failed',{message:error.message});progressTo(error.message||'Could not scan this photo.',0);}
@@ -432,24 +465,29 @@
     const track=stream?.getVideoTracks()[0];
     if(track&&torchAvailable&&!torchBusy)setTorch(track,!torchActive);
   });
-  function finishCapture(reason,primary,secondary,quality,showCheckFor){
+  function finishCapture(reason,shots,quality,showCheckFor){
+    const primary=shots.reduce((best,shot)=>shot.actualQuality?.detail>best.actualQuality?.detail+5?shot:best);
+    const others=shots.filter(shot=>shot!==primary).sort((a,b)=>(b.actualQuality?.detail||0)-(a.actualQuality?.detail||0));
+    const [secondary,third]=others;
     const {dataURL,frame,found}=primary;
     capturedLive=primary.live;
-    alternatePhoto=secondary?{dataURL:secondary.dataURL,live:secondary.live}:null;
+    alternatePhotos=others.map(shot=>({dataURL:shot.dataURL,live:shot.live,shotNumber:shot.shotNumber}));
     report.images['original-frame.jpg']=dataURL;
     if(secondary)report.images['alternate-frame.jpg']=secondary.dataURL;
-    report.capture={mode:reason,quality,shots:secondary?2:1,primaryQuality:primary.actualQuality,
+    if(third)report.images['third-frame.jpg']=third.dataURL;
+    report.capture={mode:reason,quality,shots:shots.length,primaryQuality:primary.actualQuality,
       alternateQuality:secondary?.actualQuality||null,primaryShot:primary.shotNumber,
-      alternateShot:secondary?.shotNumber||null};
-    event('camera-capture',{reason,corners:found?.corners||null,torchActive,quality,shots:secondary?2:1,
+      alternateShot:secondary?.shotNumber||null,thirdQuality:third?.actualQuality||null,
+      thirdShot:third?.shotNumber||null};
+    event('camera-capture',{reason,corners:found?.corners||null,torchActive,quality,shots:shots.length,
       primaryQuality:primary.actualQuality,alternateQuality:secondary?.actualQuality||null,
-      primaryShot:primary.shotNumber,
+      thirdQuality:third?.actualQuality||null,primaryShot:primary.shotNumber,
       soundState:soundContext?.state||'unavailable'});
-    captureCue(); // The final chime means both snapshots (when available) are saved.
-    cameraStatus.textContent=secondary?'✓ Two photos saved. You can lower the phone.':
-      '✓ Photo saved. You can lower the phone.';
+    captureCue(); // The final chime means all available snapshots are saved.
+    cameraStatus.textContent=shots.length===3?'✓ Three photos saved. You can lower the phone.':
+      secondary?'✓ Two photos saved. You can lower the phone.':'✓ Photo saved. You can lower the phone.';
     if(showCheckFor){
-      const displayed=primary.shotNumber===2?primary:secondary?.shotNumber===2?secondary:primary;
+      const displayed=shots.at(-1);
       drawLiveOutline(displayed.found,displayed.frame,true);
       video.pause();
     }
@@ -482,12 +520,11 @@
     const first={dataURL:capture.toDataURL('image/jpeg',.9),frame,found,shotNumber:1,
       live:found?{found,width:frame.width,height:frame.height}:null,actualQuality:quality?.actualQuality||null};
     report.images['original-frame.jpg']=first.dataURL;
-    if(reason==='manual'){finishCapture(reason,first,null,quality,showCheckFor);return true;}
+    if(reason==='manual'){finishCapture(reason,[first],quality,showCheckFor);return true;}
     pairing=true;event('camera-first-shot',{reason,quality:first.actualQuality});
     const aimedAt=lastLiveFound||found,started=performance.now();
-    const trySecond=()=>{
-      captureTimer=null;
-      if(!stream||!video.videoWidth)return;
+    const captureAdditional=shotNumber=>{
+      if(!stream||!video.videoWidth)return null;
       try{
         const secondFrame=imageData(video,480),secondFound=findLabel(secondFrame);
         if(core.labelReady(secondFound,secondFrame.width,secondFrame.height)&&core.sameLiveLabel(aimedAt,secondFound,.25)){
@@ -496,16 +533,31 @@
           const actual=imageData(canvas,960),scaled={corners:secondFound.corners.map(p=>({x:p.x*actual.width/secondFrame.width,y:p.y*actual.height/secondFrame.height}))};
           const actualQuality=core.labelDetail(actual,scaled);
           if(actualQuality.detail>=15&&actualQuality.glare<.025){
-            const next={dataURL:canvas.toDataURL('image/jpeg',.9),frame:secondFrame,found:secondFound,shotNumber:2,
+            return {dataURL:canvas.toDataURL('image/jpeg',.9),frame:secondFrame,found:secondFound,shotNumber,
               live:{found:secondFound,width:secondFrame.width,height:secondFrame.height},actualQuality};
-            const better=first.actualQuality&&actualQuality.detail>first.actualQuality.detail+5;
-            event('camera-second-shot',{quality:actualQuality,primary:better?'second':'first'});
-            finishCapture(reason,better?next:first,better?first:next,quality,showCheckFor);return;
           }
         }
-      }catch(error){event('camera-second-shot-error',{message:error.message});}
-      if(performance.now()-started>=1250){event('camera-second-shot-unavailable');finishCapture(reason,first,null,quality,showCheckFor);}
+      }catch(error){event('camera-additional-shot-error',{shotNumber,message:error.message});}
+      return null;
+    };
+    const trySecond=()=>{
+      captureTimer=null;
+      if(!stream||!video.videoWidth)return;
+      const second=captureAdditional(2);
+      if(second){
+        event('camera-second-shot',{quality:second.actualQuality});
+        captureTimer=setTimeout(()=>tryThird(second),220);return;
+      }
+      if(performance.now()-started>=1250){event('camera-second-shot-unavailable');finishCapture(reason,[first],quality,showCheckFor);}
       else captureTimer=setTimeout(trySecond,200);
+    };
+    const tryThird=second=>{
+      captureTimer=null;
+      if(!stream||!video.videoWidth)return;
+      const third=captureAdditional(3);
+      if(third){event('camera-third-shot',{quality:third.actualQuality});finishCapture(reason,[first,second,third],quality,showCheckFor);}
+      else if(performance.now()-started>=1000){event('camera-third-shot-unavailable');finishCapture(reason,[first,second],quality,showCheckFor);}
+      else captureTimer=setTimeout(()=>tryThird(second),150);
     };
     captureTimer=setTimeout(trySecond,500);
     return true;
