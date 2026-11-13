@@ -81,16 +81,16 @@
   function coilId(parts) {
     const candidateText=[parts.idLine,parts.idTight,parts.idUpscaled,parts.idWide,parts.barcodeLine,parts.barcodeText,parts.id,parts.fullText,parts.idRaw]
       .map(text=>upper(text).replace(/\bJ\s+S(?=[0-9OQIL][A-Z0-9]{5})/g,'J')
-        .replace(/\b([JH])\s+(?=[0-9OQILSB])/g,'$1')
+        .replace(/\b([JHG])\s+(?=[0-9OQILSB])/g,'$1')
         // The tall stroke after J can be read as an extra I, and the last
         // character of the large printed ID is occasionally separated.
-        .replace(/\b([JH])I(?=[0-9OQIL][A-Z0-9]{5}(?![A-Z0-9]))/g,'$1')
-        .replace(/\b([JH][0-9OQIL][A-Z0-9]{2}[0-9OQILS]{2})\s+(?=[A-Z0-9](?![A-Z0-9]))/g,'$1')
-        .replace(/([JH][0-9OQIL][A-Z0-9]{2}[0-9OQILS])\s+(?=[0-9OQILS][A-Z0-9])/g,'$1'));
-    const candidates=candidateText.flatMap(text=>text.match(/[JH][A-Z0-9]{6}(?![A-Z0-9])/g)||[]);
+        .replace(/\b([JHG])I(?=[0-9OQIL][A-Z0-9]{5}(?![A-Z0-9]))/g,'$1')
+        .replace(/\b([JHG][0-9OQIL][A-Z0-9]{2}[0-9OQILS]{2})\s+(?=[A-Z0-9](?![A-Z0-9]))/g,'$1')
+        .replace(/([JHG][0-9OQIL][A-Z0-9]{2}[0-9OQILS])\s+(?=[0-9OQILS][A-Z0-9])/g,'$1'));
+    const candidates=candidateText.flatMap(text=>text.match(/[JHG][A-Z0-9]{6}(?![A-Z0-9])/g)||[]);
     const valid=value=>/^[A-Z][0-9OQIL][A-Z0-9]{2}[0-9OQILS]{2}[A-Z0-9OQILS]$/.test(value);
     const normalize=value=>[...value].map((c,i)=>[1,4,5].includes(i)?({'O':'0','Q':'0','I':'1','L':'1','S':'5'}[c]||c):c).join('');
-    const line=(candidateText[0].match(/[JH][A-Z0-9]{6}(?![A-Z0-9])/g)||[]).find(valid);
+    const line=(candidateText[0].match(/[JHG][A-Z0-9]{6}(?![A-Z0-9])/g)||[]).find(valid);
     const value=(parts.barcodeDecoded&&upper(parts.barcodeDecoded))||
       (line&&candidates.slice(1).some(x=>valid(x)&&normalize(x)===normalize(line))?line:null)||
       candidates.find(valid)||candidates[0];
@@ -113,8 +113,8 @@
       if(marker && line.slice(marker.index+marker[0].length).trim()) {
         name=line.slice(marker.index+marker[0].length);break;
       }
-      if(/\b(?:PVDF\s+PRINT|KNOTTY\s+CHESTNUT|KNOTTY\s+TEAK|CHAMPAGNE\s+WAVE|STARLIGHT|HEMLOCK|WALNUT|BLACK\s+ONYX|WHITE\s+OAK|PECAN|ONYX|SUEDE|CHERRY|CEDAR|DRIFTWOOD|CYPRESS)\b/.test(line)) {
-        name=line.slice(line.search(/\b(?:PVDF|KNOTTY\s+CHESTNUT|KNOTTY\s+TEAK|CHAMPAGNE\s+WAVE|STARLIGHT|HEMLOCK|WALNUT|BLACK\s+ONYX|WHITE\s+OAK|PECAN|ONYX|SUEDE|CHERRY|CEDAR|DRIFTWOOD|CYPRESS)\b/));break;
+      if(/\b(?:PVDF\s+PRINT|KNOTTY\s+CHESTNUT|KNOTTY\s+TEAK|CHAMPAGNE\s+WAVE|COPPER\s+WAVE|SILVER\s+WAVE|STARLIGHT|HEMLOCK|WALNUT|BLACK\s+ONYX|WHITE\s+OAK|PECAN|ONYX|SUEDE|CHERRY|CEDAR|DRIFTWOOD|CYPRESS)\b/.test(line)) {
+        name=line.slice(line.search(/\b(?:PVDF|KNOTTY\s+CHESTNUT|KNOTTY\s+TEAK|CHAMPAGNE\s+WAVE|COPPER\s+WAVE|SILVER\s+WAVE|STARLIGHT|HEMLOCK|WALNUT|BLACK\s+ONYX|WHITE\s+OAK|PECAN|ONYX|SUEDE|CHERRY|CEDAR|DRIFTWOOD|CYPRESS)\b/));break;
       }
     }
     name=name.replace(/^[\s=:;|\\]+/,'').replace(/\s*(?:COATG|COATING|150\s*G\/M).*$/,'')
@@ -132,7 +132,7 @@
     const code=codeRaw.slice(0,2)+codeRaw.slice(2).replace(/[OQ]/g,'0');
     const incomplete=name.includes('(') && !name.includes(')');
     if(incomplete&&code){
-      if(/^(?:KNOTTY|CHAMPAGNE|BLACK ONYX|WHITE OAK|PECAN)/.test(name))return {value:name.replace(/\s*\([^)]*$/,'').trim()+' ('+code+')',review:true};
+      if(/^(?:KNOTTY|CHAMPAGNE|COPPER WAVE|SILVER WAVE|BLACK ONYX|WHITE OAK|PECAN)/.test(name))return {value:name.replace(/\s*\([^)]*$/,'').trim()+' ('+code+')',review:true};
       return {value:code,review:true};
     }
     if(incomplete)name=name.replace(/\s*\([^)]*$/,'').trim();
@@ -160,11 +160,11 @@
   }
   function parse(parts) {
     const out=Object.fromEntries(FIELDS.map(id=>[id,'']));out.review=[];
-    const normalizePart=value=>('L'+value.slice(1)).replace(/[OQ]/g,'0').replace(/I/g,'1');
-    const leftParts=[...upper(parts.left).matchAll(/\b[L1][.,:]?\s*[0-9OQI]{3,6}[A-Z]\b/g)]
+    const normalizePart=value=>(value[0]==='E'?'E':'L')+value.slice(1).replace(/[OQ]/g,'0').replace(/I/g,'1');
+    const leftParts=[...upper(parts.left).matchAll(/\b[L1E][.,:]?\s*[0-9OQI]{3,6}[A-Z]\b/g)]
       .map(x=>normalizePart(x[0].replace(/[.,:\s]/g,'')));
-    const upperPart=upper(parts.partUpper).match(/\b[L1][0-9OQI]{3,6}[A-Z]\b/);
-    const rightPart=upper([parts.right,parts.rightAlt].join('\n')).match(/PART\s*NO\s*([L1][0-9OQI]{3,6}[A-Z])/);
+    const upperPart=upper(parts.partUpper).match(/\b[L1E][0-9OQI]{3,6}[A-Z]\b/);
+    const rightPart=upper([parts.right,parts.rightAlt].join('\n')).match(/PART\s*NO\s*([L1E][0-9OQI]{3,6}[A-Z])/);
     const right=rightPart&&normalizePart(rightPart[1]);
     out.partNo=leftParts[0]||(upperPart&&normalizePart(upperPart[0]))||'';
     if(right&&(leftParts.includes(right)||leftParts.some(x=>x.length===right.length+1&&[...x].some((_,i)=>x.slice(0,i)+x.slice(i+1)===right)))){
@@ -176,7 +176,7 @@
     const id=coilId(parts);out.coilId=id.value;if(id.review)out.review.push('coilId');
     const color=colour(parts.right,{text:parts.rightAlt,colourCodeTight:parts.colourCodeTight,
       colourCodeLine:parts.colourCodeLine,fullText:parts.fullText});out.colour=color.value;if(color.review)out.review.push('colour');
-    const fromFull=upper(parts.fullText).match(/\bL[0-9OQI]{3,5}[A-Z]\b/);
+    const fromFull=upper(parts.fullText).match(/\b[LE][0-9OQI]{3,5}[A-Z]\b/);
     if(out.partNo&&fromFull){
       const full=normalizePart(fromFull[0]);
       if(full.length===out.partNo.length&&full!==out.partNo&&
@@ -338,8 +338,10 @@
         const metric=pair[2]?Number(result[pair[0]]):Number(value);
         if(Math.abs(expected-metric)>Math.max(2,metric*.015))return false;
       }
-      if(field==='grossLb'&&result.netLb&&Number(value)<Number(result.netLb) ||
-        field==='netLb'&&result.grossLb&&Number(value)>Number(result.grossLb))return false;
+      if(field==='grossLb'&&result.netLb&&
+          (Number(value)<Number(result.netLb)||Number(value)>Number(result.netLb)*1.25) ||
+        field==='netLb'&&result.grossLb&&
+          (Number(value)>Number(result.grossLb)||Number(result.grossLb)>Number(value)*1.25))return false;
       return true;
     };
     for(const field of FIELDS){
@@ -372,5 +374,67 @@
     result.review=[...new Set(result.review)];
     return {values:result,used,conflicts:[...new Set(conflicts)],identityMismatch:false};
   }
-  return {parse,retryFields,mergeSnapshots};
+  function mergeThreeSnapshots(shots) {
+    if(shots.length<2||shots.length>3)throw new Error('Expected two or three photo readings');
+    const compatible=(a,b)=>{
+      const shared=['partNo','coilId'].filter(field=>a.values[field]&&b.values[field]);
+      return shared.length>0&&shared.every(field=>a.values[field]===b.values[field]);
+    };
+    const groups=[];
+    if(shots.length===3&&compatible(shots[0],shots[1])&&compatible(shots[0],shots[2])&&compatible(shots[1],shots[2]))
+      groups.push([0,1,2]);
+    else for(let i=0;i<shots.length;i++)for(let j=i+1;j<shots.length;j++)if(compatible(shots[i],shots[j]))groups.push([i,j]);
+    // Identity agreement takes priority over the sharpness ranking. An OCR
+    // misread of one valid-looking ID must not let two other photos be mixed
+    // into a different coil's record.
+    groups.sort((a,b)=>{
+      const score=group=>group.length*10+['partNo','coilId'].filter(field=>
+        group.every(i=>shots[i].values[field]&&shots[i].values[field]===shots[group[0]].values[field])).length*5+
+        FIELDS.filter(field=>group.every(i=>shots[i].values[field]&&shots[i].values[field]===shots[group[0]].values[field])).length;
+      return score(b)-score(a)||a[0]-b[0];
+    });
+    const selected=groups[0]||[0],excluded=shots.map((_,i)=>i).filter(i=>!selected.includes(i));
+    let values={...shots[selected[0]].values,review:[...shots[selected[0]].values.review||[]]};
+    const used=[],conflicts=[];
+    for(const index of selected.slice(1)){
+      const merged=mergeSnapshots(values,shots[index].values,shots[selected[0]].parts);
+      values=merged.values;used.push(...merged.used);conflicts.push(...merged.conflicts);
+    }
+    if(selected.length===3){
+      // A third independent reading can settle a conflict by an exact 2/3
+      // vote. Keep all other disagreements visible for manual review.
+      const normalized=(field,value)=>field==='colour'?String(value||'').replace(/\s*\(/g,' ('):value;
+      const winners={};
+      for(const field of FIELDS){
+        const votes=selected.map(i=>shots[i].values[field]).filter(Boolean);
+        const winner=votes.find(value=>votes.filter(other=>normalized(field,other)===normalized(field,value)).length>=2);
+        if(winner)winners[field]=winner;
+      }
+      const proposed={...values,...winners};
+      for(const [field,winner] of Object.entries(winners)){
+        if(normalized(field,values[field])===normalized(field,winner))continue;
+        if(field==='colour'&&/\([A-Z]{2}[A-Z0-9]{3}\)/.test(values[field])&&
+          !/\([A-Z]{2}[A-Z0-9]{3}\)/.test(winner)&&values[field].startsWith(winner))continue;
+        const pair={netLb:['netKg',.45359237,true],netKg:['netLb',.45359237,false],
+          grossLb:['grossKg',.45359237,true],grossKg:['grossLb',.45359237,false],
+          lengthFt:['lengthM',.3048,true],lengthM:['lengthFt',.3048,false]}[field];
+        if(pair&&proposed[pair[0]]){
+          const expected=pair[2]?Number(winner)*pair[1]:Number(proposed[pair[0]])*pair[1];
+          const metric=pair[2]?Number(proposed[pair[0]]):Number(winner);
+          if(Math.abs(expected-metric)>Math.max(2,metric*.015))continue;
+        }
+        if(field==='netLb'&&proposed.grossLb&&
+            (Number(winner)>Number(proposed.grossLb)||Number(proposed.grossLb)>Number(winner)*1.25) ||
+          field==='grossLb'&&proposed.netLb&&
+            (Number(winner)<Number(proposed.netLb)||Number(winner)>Number(proposed.netLb)*1.25))continue;
+        values[field]=winner;values.review.push(field);used.push(field);conflicts.push(field);
+      }
+    }
+    if(excluded.length){conflicts.push('identity');values.review.push('partNo','coilId');}
+    values.review=[...new Set(values.review)];
+    return {values,used:[...new Set(used)],conflicts:[...new Set(conflicts)],
+      selectedShots:selected.map(i=>shots[i].shotNumber),excludedShots:excluded.map(i=>shots[i].shotNumber),
+      identityMismatch:!groups.length};
+  }
+  return {parse,retryFields,mergeSnapshots,mergeThreeSnapshots};
 });
