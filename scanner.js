@@ -8,6 +8,8 @@
   const progress = $('progressArea'), bar = $('progressBar'), status = $('progressText');
   const fullCanvas = document.createElement('canvas'), smallCanvas = document.createElement('canvas');
   let image = null, url = null, worker = null, stream = null, cameraTimer = null, captureTimer = null, scanning = false, pairing = false;
+  window.CoilScannerBusy=()=>scanning||pairing||!!stream;
+  window.CoilHasResults=()=>results.style.display==='block';
   let lastLiveImage=null, lastLiveFound=null, capturedLive=null, alternatePhotos=[];
   let report={startedAt:new Date().toISOString(),source:'none',events:[],images:{},stage:'ready'};
   function event(name,details={}) {report.events.push({at:new Date().toISOString(),name,...details});if(report.events.length>240)report.events.shift();}
@@ -33,7 +35,8 @@
       if(lastLiveImage){report.images['camera-boundary.jpg']=frameImage(lastLiveImage,lastLiveFound,report.stage);
         report.images['blue-pixel-mask.png']=maskImage(lastLiveImage,lastLiveFound);}
       if(image&&!report.images['original-frame.jpg'])report.images['original-frame.jpg']=toCanvas(imageData(image,2400)).toDataURL('image/jpeg',.86);
-      const metadata={version:'5',exportedAt:new Date().toISOString(),source:report.source,startedAt:report.startedAt,stage:report.stage,
+      const metadata={version:'6',appBuild:window.CoilStartup.info().build,versionCheck:window.CoilStartup.info(),
+        exportedAt:new Date().toISOString(),source:report.source,startedAt:report.startedAt,stage:report.stage,
         browser:navigator.userAgent,screen:{width:screen.width,height:screen.height,devicePixelRatio:devicePixelRatio},
         viewport:{width:innerWidth,height:innerHeight},
         camera:report.camera||null,capture:report.capture||null,secondary:report.secondary||null,
@@ -205,7 +208,9 @@
     return {regions,parts,values,found:{corners:found.corners,coverage:found.coverage}};
   }
   async function runScan(){
-    if(!image||scanning)return;scanning=true;scan.disabled=true;progress.style.display='block';results.style.display='none';progressTo('Finding the blue label...',8);
+    if(!image||scanning)return;
+    if(report.source==='photo-picker'&&!(await window.CoilStartup.ready()))return;
+    scanning=true;scan.disabled=true;progress.style.display='block';results.style.display='none';progressTo('Finding the blue label...',8);
     report.stage='detecting';event('scan-start',{imageWidth:image.naturalWidth,imageHeight:image.naturalHeight});
     try {
       if(typeof Tesseract==='undefined')throw new Error('OCR library did not load. Check the internet connection.');
@@ -596,8 +601,9 @@
   }
   $('startCamera').addEventListener('click',async()=>{
     if(scanning)return;
-    resetReport('live-camera');report.stage='camera-starting';
     unlockCaptureSound(); // iOS needs audio enabled directly from the user's tap.
+    if(!(await window.CoilStartup.ready()))return;
+    resetReport('live-camera');report.stage='camera-starting';
     if(!navigator.mediaDevices?.getUserMedia){cameraStatus.textContent='Live camera is unavailable. Use the photo picker below.';return;}
     try{
       stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
