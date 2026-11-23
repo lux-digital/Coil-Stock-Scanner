@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-startup="checking">
 <head>
     <meta charset="UTF-8">
 
@@ -12,9 +12,114 @@
     <meta name="theme-color" content="#151515">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Coil Scanner">
+    <meta name="coil-build" content="2026-11-23.1">
     <link rel="apple-touch-icon" href="coil-icon.png?v=2">
     <link rel="icon" type="image/png" href="coil-icon.png?v=2">
     <link rel="manifest" href="manifest.webmanifest">
+
+    <script id="coilStartup">
+    (() => {
+        const build = document.querySelector('meta[name="coil-build"]').content;
+        let status = 'checking', checkedAt = null, lastCheck = 0, pendingBuild = null;
+        let checking = null, continued = false;
+        const get = id => document.getElementById(id);
+        const info = () => ({build, status, checkedAt, pendingBuild});
+        function gate(message, retry = false, proceed = false) {
+            document.documentElement.dataset.startup = 'checking';
+            get('startupMessage').textContent = message;
+            get('startupRetry').hidden = !retry;
+            get('startupContinue').hidden = !proceed;
+        }
+        function notice(message) {
+            get('updateNotice').hidden = !message;
+            get('updateNoticeText').textContent = message || '';
+        }
+        function unlock() { document.documentElement.dataset.startup = 'ready'; }
+        function freshBuild(html) {
+            return html.match(/<meta\s+name=["']coil-build["']\s+content=["']([^"']+)["']/i)?.[1] || '';
+        }
+        async function check({blocking = false, force = false} = {}) {
+            if (checking) return checking;
+            if (!force && !blocking && status === 'current' && Date.now() - lastCheck < 15000) return true;
+            if (blocking) gate('Checking for the latest scanner version…');
+            checking = (async () => {
+                try {
+                    const controller = new AbortController();
+                    const timeout = setTimeout(() => controller.abort(), 4000);
+                    let remote;
+                    try {
+                        const url = new URL('index.html', document.baseURI);
+                        url.searchParams.set('_coilCheck', String(Date.now()));
+                        const response = await fetch(url, {cache: 'no-store', signal: controller.signal});
+                        if (!response.ok) throw new Error('Version request failed');
+                        remote = freshBuild(await response.text());
+                        if (!remote) throw new Error('Version information missing');
+                    } finally { clearTimeout(timeout); }
+                    checkedAt = new Date().toISOString();
+                    lastCheck = Date.now();
+                    if (remote !== build) {
+                        pendingBuild = remote;
+                        if (!blocking && (window.CoilScannerBusy?.() || window.CoilHasResults?.())) {
+                            status = 'pending';
+                            notice('A scanner update is available. Finish this scan, then check for updates.');
+                            return false;
+                        }
+                        const address = new URL(location.href);
+                        if (address.searchParams.get('coilBuild') === remote && !force) {
+                            status = 'stale';
+                            gate('The latest version did not load. Try again, or use this version for now.', true, true);
+                            return false;
+                        }
+                        status = 'updating';
+                        gate('Loading the latest scanner version…');
+                        address.searchParams.set('coilBuild', remote);
+                        address.searchParams.set('_reload', String(Date.now()));
+                        location.replace(address.href);
+                        setTimeout(() => {
+                            if (status === 'updating') {
+                                status = 'stale';
+                                gate('The update did not finish. Try again, or use this version for now.', true, true);
+                            }
+                        }, 8000);
+                        return false;
+                    }
+                    status = 'current'; pendingBuild = null; continued = false;
+                    notice(''); unlock();
+                    return true;
+                } catch (error) {
+                    status = 'unverified'; checkedAt = null; continued = false;
+                    if (blocking) gate('Could not check for an update. Try again, or use this version for now.', true, true);
+                    else notice('Could not check the scanner version. Check again before your next scan.');
+                    return false;
+                } finally { checking = null; }
+            })();
+            return checking;
+        }
+        function ready() {
+            if (checking) return checking;
+            if (status === 'current' && Date.now() - lastCheck < 5 * 60 * 1000) return Promise.resolve(true);
+            if (status === 'unverified' && continued) return Promise.resolve(true);
+            return check({blocking: true});
+        }
+        window.CoilStartup = {info, ready, check};
+        document.addEventListener('DOMContentLoaded', () => {
+            get('buildLabel').textContent = 'Version ' + build;
+            get('startupRetry').addEventListener('click', () => check({blocking: true, force: true}));
+            get('startupContinue').addEventListener('click', () => {
+                continued = true; status = 'unverified'; unlock();
+                notice('Version not verified. You can scan, or check again when connected.');
+            });
+            get('checkUpdate').addEventListener('click', () => check({blocking: true, force: true}));
+            check({blocking: true});
+        });
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) check();
+        });
+        window.addEventListener('pageshow', event => {
+            if (event.persisted) check();
+        });
+    })();
+    </script>
 
     <!--
         Tesseract.js
@@ -25,7 +130,7 @@
     <script defer src="scanner-core.js?v=15"></script>
     <script defer src="scanner-parser.js?v=11"></script>
     <script defer src="diagnostics.js?v=3"></script>
-    <script defer src="scanner.js?v=21"></script>
+    <script defer src="scanner.js?v=22"></script>
 
     <style>
         * {
@@ -60,6 +165,64 @@
         body {
             min-height: 100vh;
         }
+
+        .startup-gate {
+            position: fixed;
+            inset: 0;
+            z-index: 1000;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            background: var(--bg);
+        }
+
+        [data-startup="ready"] .startup-gate {
+            display: none;
+        }
+
+        .startup-card {
+            width: min(430px, 100%);
+            padding: 24px;
+            border-radius: 18px;
+            background: var(--card);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+        }
+
+        .startup-card h2 { margin: 0 0 12px; }
+        .startup-card p { line-height: 1.5; }
+
+        .build-line {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+            margin: 8px 0 0;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        button.text-button {
+            min-width: 0;
+            flex: none;
+            padding: 0;
+            border: 0;
+            color: #145599;
+            background: transparent;
+            font: inherit;
+            text-decoration: underline;
+        }
+
+        .update-notice {
+            margin-bottom: 16px;
+            padding: 12px 15px;
+            border-radius: 11px;
+            background: #fff3d9;
+            color: #693c00;
+            font-size: 14px;
+            line-height: 1.45;
+        }
+
+        [hidden] { display: none !important; }
 
         .app {
             width: min(960px, 100%);
@@ -401,6 +564,17 @@
 
 <body>
 
+<div class="startup-gate" id="startupGate" role="dialog" aria-modal="true" aria-labelledby="startupTitle">
+    <div class="startup-card">
+        <h2 id="startupTitle">Coil Scanner</h2>
+        <p id="startupMessage" role="status">Checking for the latest scanner version…</p>
+        <div class="buttons">
+            <button type="button" class="primary" id="startupRetry" hidden>TRY AGAIN</button>
+            <button type="button" class="secondary" id="startupContinue" hidden>USE CURRENT VERSION</button>
+        </div>
+    </div>
+</div>
+
 <div class="app">
 
     <header>
@@ -416,8 +590,11 @@
             <p class="subtitle">
                 Photograph a steel coil label and extract stock information.
             </p>
+            <p class="build-line"><span id="buildLabel"></span><button type="button" class="text-button" id="checkUpdate">CHECK FOR UPDATE</button></p>
         </div>
     </header>
+
+    <div id="updateNotice" class="update-notice" role="status" hidden><span id="updateNoticeText"></span></div>
 
     <section class="card">
         <button class="primary" id="startCamera">START LIVE SCANNER</button>
